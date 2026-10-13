@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Định nghĩa các hằng số của plugin
-define('WOO_TRACK_VERSION', '1.0.0');
+define('WOO_TRACK_VERSION', '1.0.1');
 define('WOO_TRACK_FILE', __FILE__);
 define('WOO_TRACK_PATH', plugin_dir_path(__FILE__));
 define('WOO_TRACK_URL', plugin_dir_url(__FILE__));

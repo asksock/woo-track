@@ -179,14 +179,33 @@ class WooTrack_Tracker {
             }
         }
 
+        $checkout_total = (float) WC()->cart->get_total('edit');
+        $currency       = get_woocommerce_currency();
+
         $this->events[] = array(
             'event' => 'begin_checkout',
             'data'  => array(
-                'currency' => get_woocommerce_currency(),
-                'value'    => (float) WC()->cart->get_total('edit'),
+                'currency' => $currency,
+                'value'    => $checkout_total,
                 'items'    => $items
             )
         );
+
+        // Bắn chuyển đổi phụ cho Google Ads nếu có cấu hình nhãn Begin Checkout
+        $gads_id              = WooTrack_Helper::get_setting('gads_id', '');
+        $begin_checkout_label = WooTrack_Helper::get_setting('begin_checkout_label', '');
+
+        if (!empty($gads_id) && !empty($begin_checkout_label)) {
+            $conversion_send_to = rtrim($gads_id, '/') . '/' . ltrim($begin_checkout_label, '/');
+            $this->events[] = array(
+                'event' => 'conversion',
+                'data'  => array(
+                    'send_to'  => $conversion_send_to,
+                    'value'    => $checkout_total,
+                    'currency' => $currency
+                )
+            );
+        }
     }
 
     /**
