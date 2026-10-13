@@ -1,11 +1,11 @@
 /**
- * WooTrack - Google Analytics 4 & Google Ads Frontend Tracker
+ * WooTrack - Google Analytics 4, Google Ads & Google Tag Manager Frontend Tracker
  */
 
 (function ($) {
     'use strict';
 
-    // Đảm bảo dataLayer và hàm gtag luôn sẵn sàng ngay cả khi Site Kit load bất đồng bộ
+    // Đảm bảo dataLayer và hàm gtag luôn sẵn sàng
     window.dataLayer = window.dataLayer || [];
     if (typeof window.gtag !== 'function') {
         window.gtag = function () {
@@ -13,8 +13,14 @@
         };
     }
 
-    var config  = window.wooTrackConfig || {};
-    var payload = window.wooTrackPayload || { events: [], user_data: null, single_product: null };
+    var config = window.wooTrackConfig || {};
+
+    /**
+     * Lấy dữ liệu payload động từ window (tránh lỗi cache do thứ tự nạp script)
+     */
+    function getPayload() {
+        return window.wooTrackPayload || { events: [], user_data: null, single_product: null };
+    }
 
     /**
      * Hàm in log hỗ trợ kiểm tra khi bật Debug Mode
@@ -30,25 +36,28 @@
     }
 
     /**
-     * Hàm bắn sự kiện an toàn qua gtag
+     * Hàm bắn sự kiện an toàn cho cả gtag (GA4, Google Ads) và dataLayer (GTM)
      */
     function sendGtagEvent(eventName, eventData) {
+        // 1. Bắn qua gtag cho GA4 và Google Ads
         gtag('event', eventName, eventData);
+
+        // 2. Đẩy vào dataLayer chuẩn E-commerce cho Google Tag Manager (GTM)
+        if (config.gtm_id) {
+            window.dataLayer.push({
+                event: eventName,
+                ecommerce: eventData
+            });
+        }
+
         debugLog(eventName, eventData);
     }
 
     /**
-     * Khởi tạo cấu hình Google Ads nếu có
+     * Khởi tạo cấu hình ban đầu
      */
     function initTrackerConfig() {
-        if (config.gads_id) {
-            var configOptions = {};
-            if (config.enable_enhanced_conversions) {
-                configOptions.allow_enhanced_conversions = true;
-            }
-            gtag('config', config.gads_id, configOptions);
-            debugLog('Configured Google Ads ID with options:', { id: config.gads_id, options: configOptions });
-        }
+        var payload = getPayload();
 
         // Kích hoạt Enhanced Conversions toàn cục nếu người dùng bật tính năng này
         if (config.enable_enhanced_conversions) {
@@ -106,6 +115,7 @@
         // 2. Thêm vào giỏ hàng trên trang Chi tiết sản phẩm (Single Product Form)
         $('form.cart').on('click', '.single_add_to_cart_button', function () {
             var $form = $(this).closest('form.cart');
+            var payload = getPayload();
             var baseItem = payload.single_product;
 
             if (!baseItem) {
@@ -129,20 +139,20 @@
     }
 
     /**
-     * Bắn sự kiện add_to_cart cho GA4 và Google Ads Conversion (nếu có label)
+     * Bắn sự kiện add_to_cart cho GA4, GTM và Google Ads Conversion (nếu có label)
      */
     function triggerAddToCartEvent(item) {
         if (!item) return;
 
         var totalValue = (parseFloat(item.price) || 0) * (parseInt(item.quantity, 10) || 1);
 
-        // Bắn sự kiện GA4
-        var ga4EventData = {
+        // Bắn sự kiện E-commerce
+        var eventData = {
             currency: config.currency || 'VND',
             value: totalValue,
             items: [item]
         };
-        sendGtagEvent('add_to_cart', ga4EventData);
+        sendGtagEvent('add_to_cart', eventData);
 
         // Bắn chuyển đổi phụ Google Ads nếu có cấu hình nhãn Add to cart
         if (config.gads_id && config.add_to_cart_label) {
