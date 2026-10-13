@@ -3,7 +3,7 @@
  * Plugin Name: WooTrack - Google Analytics & Ads Tracker for WooCommerce
  * Plugin URI:  https://github.com/asksock/woo-track
  * Description: Plugin chuyên dụng theo dõi các sự kiện E-commerce cho Google Analytics (GA4) và Google Ads Conversion Tracking trên WooCommerce (tương thích Google Site Kit).
- * Version:     1.0.1
+ * Version:     1.0.2
  * Author:      AskSock
  * Author URI:  https://github.com/asksock
  * Text Domain: woo-track
