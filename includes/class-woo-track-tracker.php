@@ -29,10 +29,14 @@ class WooTrack_Tracker {
         // 4. Gắn dữ liệu tracking vào nút Add to cart trên loop (Shop/Archive)
         add_filter('woocommerce_loop_add_to_cart_link', array($this, 'add_tracking_data_to_loop_button'), 10, 3);
 
-        // 5. Ghi nhận sự kiện khi đơn hàng hoàn tất (Trang Thank You qua hook chuẩn)
+        // 5. Bắt sự kiện thêm vào giỏ hàng từ server (cả form submit thường lẫn AJAX)
+        add_action('woocommerce_add_to_cart', array($this, 'on_woocommerce_add_to_cart'), 10, 6);
+        add_filter('woocommerce_add_to_cart_fragments', array($this, 'add_tracking_to_fragments'), 10, 1);
+
+        // 6. Ghi nhận sự kiện khi đơn hàng hoàn tất (Trang Thank You qua hook chuẩn)
         add_action('woocommerce_thankyou', array($this, 'track_purchase_event'), 10, 1);
 
-        // 6. In dataLayer payload vào footer (priority 15 chạy TRƯỚC priority 20 của scripts)
+        // 7. In dataLayer payload vào footer (priority 15 chạy TRƯỚC priority 20 của scripts)
         add_action('wp_footer', array($this, 'render_footer_events'), 15);
     }
 
@@ -96,7 +100,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
      * Tải script theo dõi Frontend
      */
     public function enqueue_scripts() {
-        if (!is_woocommerce() && !is_cart() && !is_checkout()) {
+        if (is_admin()) {
             return;
         }
 
@@ -130,6 +134,15 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     public function detect_page_events() {
         if (is_admin()) {
             return;
+        }
+
+        // 0. Bắt sự kiện add_to_cart lưu trong session (khi thêm vào giỏ bằng form submit thường chuyển trang)
+        if (function_exists('WC') && WC()->session && WooTrack_Helper::is_event_enabled('add_to_cart')) {
+            $pending_add_to_cart = WC()->session->get('woo_track_pending_add_to_cart');
+            if (!empty($pending_add_to_cart)) {
+                $this->events[] = $pending_add_to_cart;
+                WC()->session->__unset('woo_track_pending_add_to_cart');
+            }
         }
 
         // 1. Sự kiện view_item (Trang chi tiết sản phẩm)
@@ -237,30 +250,45 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
      * Chuẩn bị dữ liệu cho begin_checkout
      */
     private function prepare_begin_checkout_event() {
-        if (!WC()->cart || WC()->cart->is_empty()) {
+        if (!function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
             return;
+        }
+
+        // Tránh bị add lặp lại nếu đã có trong events
+        foreach ($this->events as $ev) {
+            if ($ev['event'] === 'begin_checkout') {
+                return;
+            }
         }
 
         $items = array();
         $index = 1;
 
         foreach (WC()->cart->get_cart() as $cart_item_key => $cart_item) {
-            $product = $cart_item['data'];
-            if ($product) {
+            $product = isset($cart_item['data']) ? $cart_item['data'] : null;
+            if ($product && $product instanceof WC_Product) {
                 $item_data = WooTrack_Helper::format_product_item($product, $cart_item['quantity'], $index);
                 $items[] = $item_data;
                 $index++;
             }
         }
 
-        $checkout_total = (float) WC()->cart->get_total('edit');
-        $currency       = get_woocommerce_currency();
+        if (empty($items)) {
+            return;
+        }
+
+        WC()->cart->calculate_totals();
+        $checkout_total = (float) WC()->cart->total;
+        if ($checkout_total <= 0) {
+            $checkout_total = (float) WC()->cart->get_cart_contents_total();
+        }
+        $currency = get_woocommerce_currency();
 
         $this->events[] = array(
             'event' => 'begin_checkout',
             'data'  => array(
                 'currency' => $currency,
-                'value'    => $checkout_total,
+                'value'    => round($checkout_total, 2),
                 'items'    => $items
             )
         );
@@ -275,7 +303,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
                 'event' => 'conversion',
                 'data'  => array(
                     'send_to'  => $conversion_send_to,
-                    'value'    => $checkout_total,
+                    'value'    => round($checkout_total, 2),
                     'currency' => $currency
                 )
             );
@@ -294,6 +322,69 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         $json_data = esc_attr(wp_json_encode($item_data));
 
         return preg_replace('/(<a\b[^>]*)(class=["\'][^"\']*["\'])/i', '$1 data-woo-track-item="' . $json_data . '" $2', $html);
+    }
+
+    /**
+     * Bắt sự kiện thêm vào giỏ hàng từ server (cả form submit thường lẫn API)
+     */
+    public function on_woocommerce_add_to_cart($cart_item_key, $product_id, $quantity, $variation_id, $variation, $cart_item_data) {
+        if (!WooTrack_Helper::is_event_enabled('add_to_cart')) {
+            return;
+        }
+
+        $target_id = !empty($variation_id) ? $variation_id : $product_id;
+        $product = wc_get_product($target_id);
+        if (!$product) {
+            $product = wc_get_product($product_id);
+        }
+        if (!$product) {
+            return;
+        }
+
+        $item_data = WooTrack_Helper::format_product_item($product, $quantity, 1);
+        $total_value = (float) $item_data['price'] * (int) $quantity;
+
+        $event_payload = array(
+            'event' => 'add_to_cart',
+            'data'  => array(
+                'currency' => get_woocommerce_currency(),
+                'value'    => round($total_value, 2),
+                'items'    => array($item_data)
+            )
+        );
+
+        // Chuyển đổi phụ cho Google Ads nếu có nhãn
+        $gads_id           = WooTrack_Helper::get_setting('gads_id', '');
+        $add_to_cart_label = WooTrack_Helper::get_setting('add_to_cart_label', '');
+        if (!empty($gads_id) && !empty($add_to_cart_label)) {
+            $conversion_send_to = rtrim($gads_id, '/') . '/' . ltrim($add_to_cart_label, '/');
+            $event_payload['conversion_data'] = array(
+                'send_to'  => $conversion_send_to,
+                'value'    => round($total_value, 2),
+                'currency' => get_woocommerce_currency()
+            );
+        }
+
+        // Lưu vào session để bắn ở trang tiếp theo (nếu chuyển trang hoặc reload)
+        if (function_exists('WC') && WC()->session) {
+            WC()->session->set('woo_track_pending_add_to_cart', $event_payload);
+        }
+
+        // Lưu tạm vào biến request hiện tại cho AJAX fragments
+        $GLOBALS['woo_track_last_added_item'] = $event_payload;
+    }
+
+    /**
+     * Đính kèm dữ liệu vào phản hồi AJAX add to cart fragments
+     */
+    public function add_tracking_to_fragments($fragments) {
+        if (!empty($GLOBALS['woo_track_last_added_item'])) {
+            $fragments['woo_track_add_to_cart'] = $GLOBALS['woo_track_last_added_item'];
+            if (function_exists('WC') && WC()->session) {
+                WC()->session->__unset('woo_track_pending_add_to_cart');
+            }
+        }
+        return $fragments;
     }
 
     /**
@@ -369,10 +460,21 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         $order->save();
     }
 
-    /**
-     * Xuất các sự kiện đã chuẩn bị ra footer dưới dạng JS data object
-     */
     public function render_footer_events() {
+        // Đảm bảo begin_checkout luôn được chuẩn bị trên trang checkout (kể cả khi cart session tải muộn)
+        if (is_checkout() && !is_order_received_page() && WooTrack_Helper::is_event_enabled('begin_checkout')) {
+            $has_begin_checkout = false;
+            foreach ($this->events as $ev) {
+                if ($ev['event'] === 'begin_checkout') {
+                    $has_begin_checkout = true;
+                    break;
+                }
+            }
+            if (!$has_begin_checkout) {
+                $this->prepare_begin_checkout_event();
+            }
+        }
+
         $single_product_data = null;
         if (is_product() && WooTrack_Helper::is_event_enabled('add_to_cart')) {
             global $post;

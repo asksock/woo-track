@@ -37,18 +37,16 @@
 
     /**
      * Hàm bắn sự kiện an toàn cho cả gtag (GA4, Google Ads) và dataLayer (GTM)
+     * Tránh nhân đôi sự kiện trên dòng thời gian Tag Assistant
      */
     function sendGtagEvent(eventName, eventData) {
-        // 1. Bắn qua gtag cho GA4 và Google Ads
-        gtag('event', eventName, eventData);
-
-        // 2. Đẩy vào dataLayer chuẩn E-commerce cho Google Tag Manager (GTM)
+        // Chuẩn hóa dataLayer cho GTM: xóa ecommerce cũ trước khi nạp dữ liệu mới
         if (config.gtm_id) {
-            window.dataLayer.push({
-                event: eventName,
-                ecommerce: eventData
-            });
+            window.dataLayer.push({ ecommerce: null });
         }
+
+        // Bắn qua gtag (gtag sẽ tự động đồng bộ vào dataLayer chuẩn xác mà không sinh event trùng)
+        gtag('event', eventName, eventData);
 
         debugLog(eventName, eventData);
     }
@@ -82,59 +80,86 @@
      * Lắng nghe sự kiện thêm vào giỏ hàng (Add to Cart)
      */
     function setupAddToCartListeners() {
-        // 1. AJAX Add to cart trên trang Danh mục / Shop
+        // 1. AJAX Add to cart (Hỗ trợ cả fragments từ server và nút bấm loop)
         $(document.body).on('added_to_cart', function (event, fragments, cart_hash, $button) {
-            if (!$button || !$button.length) {
+            // Nếu có dữ liệu chuẩn từ server gửi qua fragments
+            if (fragments && fragments.woo_track_add_to_cart) {
+                var serverPayload = fragments.woo_track_add_to_cart;
+                sendGtagEvent(serverPayload.event, serverPayload.data);
+                if (serverPayload.conversion_data) {
+                    sendGtagEvent('conversion', serverPayload.conversion_data);
+                }
                 return;
             }
 
-            var itemDataAttr = $button.attr('data-woo-track-item');
+            // Fallback lấy dữ liệu từ nút bấm
             var item = null;
+            if ($button && $button.length) {
+                var itemDataAttr = $button.attr('data-woo-track-item');
+                if (itemDataAttr) {
+                    try {
+                        item = JSON.parse(itemDataAttr);
+                    } catch (e) {
+                        item = null;
+                    }
+                }
 
-            if (itemDataAttr) {
-                try {
-                    item = JSON.parse(itemDataAttr);
-                } catch (e) {
-                    item = null;
+                if (!item) {
+                    var productId = $button.data('product_id') || $button.val();
+                    var quantity  = $button.data('quantity') || 1;
+                    if (productId) {
+                        item = {
+                            item_id: String(productId),
+                            quantity: parseInt(quantity, 10) || 1
+                        };
+                    }
                 }
             }
 
-            // Fallback nếu không có attribute JSON
-            if (!item) {
-                var productId = $button.data('product_id') || $button.val();
-                var quantity  = $button.data('quantity') || 1;
-                item = {
-                    item_id: String(productId),
-                    quantity: parseInt(quantity, 10) || 1
-                };
+            if (item) {
+                triggerAddToCartEvent(item);
             }
-
-            triggerAddToCartEvent(item);
         });
 
-        // 2. Thêm vào giỏ hàng trên trang Chi tiết sản phẩm (Single Product Form)
-        $('form.cart').on('click', '.single_add_to_cart_button', function () {
-            var $form = $(this).closest('form.cart');
+        // 2. Thêm vào giỏ hàng trên trang Chi tiết sản phẩm hoặc Popup
+        $(document).on('click', '.single_add_to_cart_button, button[name="add-to-cart"]', function () {
+            var $btn  = $(this);
+            var $form = $btn.closest('form');
             var payload = getPayload();
             var baseItem = payload.single_product;
 
-            if (!baseItem) {
-                return;
+            var qty = 1;
+            if ($form.length && $form.find('input[name="quantity"]').length) {
+                qty = parseInt($form.find('input[name="quantity"]').val(), 10) || 1;
             }
 
-            var qty = parseInt($form.find('input[name="quantity"]').val(), 10) || 1;
-            var itemCopy = $.extend({}, baseItem);
-            itemCopy.quantity = qty;
+            var item = null;
 
-            // Xử lý sản phẩm có biến thể (Variable Product)
-            var variationId = $form.find('input[name="variation_id"]').val();
-            if (variationId && parseInt(variationId, 10) > 0) {
-                if (config.product_identifier !== 'sku') {
-                    itemCopy.item_id = String(variationId);
+            if (baseItem) {
+                item = $.extend({}, baseItem);
+                item.quantity = qty;
+
+                var variationId = $form.find('input[name="variation_id"]').val();
+                if (variationId && parseInt(variationId, 10) > 0) {
+                    if (config.product_identifier !== 'sku') {
+                        item.item_id = String(variationId);
+                    }
+                }
+            } else {
+                // Fallback nếu không có sẵn baseItem
+                var prodId = $btn.val() || $form.find('input[name="add-to-cart"]').val() || $form.find('input[name="product_id"]').val();
+                if (prodId) {
+                    item = {
+                        item_id: String(prodId),
+                        item_name: $('.product_title, h1.entry-title').first().text().trim() || 'Product',
+                        quantity: qty
+                    };
                 }
             }
 
-            triggerAddToCartEvent(itemCopy);
+            if (item) {
+                triggerAddToCartEvent(item);
+            }
         });
     }
 
@@ -166,11 +191,31 @@
     }
 
     /**
+     * Bắt sự kiện click Tiến hành thanh toán từ giỏ hàng (Proceed to Checkout)
+     */
+    function setupCheckoutListeners() {
+        $(document).on('click', '.checkout-button, a.checkout-button', function () {
+            sendGtagEvent('begin_checkout', {
+                currency: config.currency || 'VND'
+            });
+
+            if (config.gads_id && config.begin_checkout_label) {
+                var conversionSendTo = config.gads_id.replace(/\/$/, '') + '/' + config.begin_checkout_label.replace(/^\//, '');
+                sendGtagEvent('conversion', {
+                    send_to: conversionSendTo,
+                    currency: config.currency || 'VND'
+                });
+            }
+        });
+    }
+
+    /**
      * Khởi chạy khi DOM sẵn sàng
      */
     $(document).ready(function () {
         initTrackerConfig();
         setupAddToCartListeners();
+        setupCheckoutListeners();
     });
 
 })(jQuery);
