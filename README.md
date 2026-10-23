@@ -64,24 +64,27 @@ Trong `assets/js/woo-track.js`, hàm `sendGtagEvent(eventName, eventData)` xử 
 * **Với GA4 & Google Ads trực tiếp (`gtag`):**
   * Gọi trực tiếp `gtag('event', eventName, eventData)` để truyền dữ liệu thẳng về máy chủ Google.
 
-### 2.3. Tương thích Kép: GA4 Ecommerce + Google Ads Dynamic Remarketing & Cart Data
+### 2.3. Tương thích Kép: GA4 Ecommerce + Google Ads Dynamic Remarketing & Cart Data + 3 Chế độ Định danh Sản phẩm
 Trong `WooTrack_Helper::format_product_item()`, mỗi sản phẩm trong mảng `items` được đóng gói đồng thời các trường của cả GA4 lẫn Google Ads:
 ```json
 {
   "id": "1042",
   "item_id": "1042",
-  "item_name": "Áo Polo Nam Cao Cấp",
+  "item_name": "Extension Automation Pro",
   "price": 350000,
-  "quantity": 2,
+  "quantity": 1,
   "index": 1,
   "google_business_vertical": "retail",
-  "item_category": "Áo Nam",
-  "item_variant": "xanh-navy, size-l"
+  "item_category": "Extensions",
+  "item_variant": "5-thiet-bi"
 }
 ```
 * **`item_id`**: Phục vụ chuẩn báo cáo của **GA4**.
 * **`id` & `google_business_vertical: "retail"`**: Phục vụ chuẩn **Google Ads Dynamic Remarketing** và **Conversions with Cart Data (CwCD)** để đối chiếu trực tiếp với nguồn cấp dữ liệu trên **Google Merchant Center (GMC)**.
-* Người dùng có thể chọn dùng **Post ID** (ví dụ `1042`) hoặc **Mã SKU** trong trang cài đặt để khớp 100% với Feed sản phẩm trên GMC.
+* **3 Chế độ Định danh Sản phẩm (`product_identifier`) linh hoạt:**
+  1. **`parent_id` (Mặc định - Tối ưu cho sản phẩm số / Extension / Phần mềm chia nhiều gói thiết bị):** Luôn gửi **ID của Sản phẩm cha** xuyên suốt từ bước `ViewContent` / `view_item` $\rightarrow$ `AddToCart` $\rightarrow$ `InitiateCheckout` $\rightarrow$ `Purchase` để phễu chuyển đổi sản phẩm không bị đứt gãy, trong khi **Giá tiền (`price` / `value` / `item_price`)** và **Tên gói (`item_variant`)** vẫn tự động lấy chính xác 100% theo gói biến thể khách chọn (ví dụ: *Gói 2 thiết bị*, *Gói 5 thiết bị*). Nếu giỏ hàng có nhiều gói của cùng 1 sản phẩm cha, mảng `content_ids` sẽ tự động được lọc duy nhất (`array_unique`).
+  2. **`id` (Variation / Post ID):** Gửi ID riêng biệt của từng biến thể sản phẩm (phù hợp với shop thời trang/vật lý tách từng biến thể trên Google Merchant Center).
+  3. **`sku` (Mã SKU):** Gửi mã SKU của sản phẩm/biến thể (nếu trống sẽ tự động fallback về ID).
 
 ### 2.4. Cơ chế Thu nạp Khách hàng mới (`new_customer`) & Dữ liệu Giỏ hàng (`discount`, `items`)
 Khi phát sinh đơn hàng (`purchase`), hàm `WooTrack_Helper::format_order_data()` và `is_new_customer($order)` tự động:
@@ -177,7 +180,7 @@ Khi khách hoàn tất đơn hàng trên trang Cảm ơn:
 | **2. Xem danh sách SP**<br>(`view_item_list`) | `is_shop()` hoặc `is_product_taxonomy()` trong hook `wp` | Thu thập tối đa 12 sản phẩm đầu tiên trong danh sách hiện tại (`$wp_query->posts`), tự động phân biệt danh sách Cửa hàng (`shop`), Danh mục (`cat_{id}`) hoặc Thẻ (`tag_{id}`). |
 | **3. Xem chi tiết SP**<br>(`view_item` / `ViewContent`) | `is_product()` trong hook `wp` | Lấy thông tin chi tiết sản phẩm hiện tại (ID/SKU, tên, danh mục, giá hiển thị, tiền tệ) và đẩy vào `window.wooTrackPayload` để bắn ngay khi trang tải xong. |
 | **4. Tìm kiếm SP**<br>(`Search` - Meta) | `is_search()` trong hook `wp` | Lấy từ khóa tìm kiếm `get_search_query()` cùng danh sách ID/SKU của tối đa 10 sản phẩm kết quả đầu tiên gửi vào `search_string` và `content_ids`. |
-| **5. Thêm vào giỏ hàng**<br>(`add_to_cart` / `AddToCart`) | Kết hợp **Server Hook** + **AJAX Fragments** + **DOM Click** | Hỗ trợ mọi kiểu thêm giỏ hàng trên WooCommerce:<br>• **Nút AJAX ngoài trang Shop/Danh mục:** Filter `woocommerce_loop_add_to_cart_link` (dùng `preg_replace_callback` an toàn) gắn dữ liệu vào thuộc tính `data-woo-track-item` & `data-woo-track-meta-item`. Đồng thời hook `woocommerce_add_to_cart` + `woocommerce_add_to_cart_fragments` trả về dữ liệu chính xác từ server qua phản hồi AJAX.<br>• **Trang chi tiết sản phẩm (Single Product) & Biến thể (Variations):** Lắng nghe sự kiện click nút `.single_add_to_cart_button`, tự động tra cứu giá (`display_price`) và `SKU` của đúng biến thể đang chọn từ `product_variations`. Đồng thời lưu dự phòng vào `WC()->session` nếu form thực hiện tải lại trang. |
+| **5. Thêm vào giỏ hàng**<br>(`add_to_cart` / `AddToCart`) | Kết hợp **Server Hook** + **AJAX Fragments** + **DOM Click** + **`found_variation`** | Hỗ trợ mọi kiểu thêm giỏ hàng trên WooCommerce:<br>• **Nút AJAX ngoài trang Shop/Danh mục:** Filter `woocommerce_loop_add_to_cart_link` (dùng `preg_replace_callback` an toàn) gắn dữ liệu vào thuộc tính `data-woo-track-item` & `data-woo-track-meta-item`. Đồng thời hook `woocommerce_add_to_cart` + `woocommerce_add_to_cart_fragments` trả về dữ liệu chính xác từ server qua phản hồi AJAX.<br>• **Trang chi tiết sản phẩm (Single Product) & Biến thể (Variations):** Lắng nghe sự kiện `found_variation` của WooCommerce và sự kiện click nút `.single_add_to_cart_button`, tự động tra cứu giá (`display_price`) và `SKU` của đúng biến thể đang chọn (hỗ trợ cả sản phẩm có > 30 biến thể nạp qua AJAX). Đồng thời chỉ lưu dự phòng vào `WC()->session` (với hạn sử dụng 30 giây) nếu form thực hiện submit tải lại trang truyền thống. |
 | **6. Bắt đầu thanh toán**<br>(`begin_checkout` / `InitiateCheckout`) | `is_checkout() && !is_order_received_page()` | Duyệt toàn bộ giỏ hàng `WC()->cart->get_cart()`, tính tổng tiền (`total`) và tổng số lượng thực tế của tất cả sản phẩm (`$total_qty` cho `num_items`). Nếu có cấu hình nhãn Google Ads *Begin Checkout Label*, tự động bắn thêm sự kiện `conversion` phụ cho Google Ads. |
 | **7. Mua hàng thành công**<br>(`purchase` / `Purchase` + `conversion`) | Trang Cảm ơn (`order-received` / `woocommerce_thankyou`) & Hook dự phòng (`woocommerce_payment_complete`, `woocommerce_order_status_completed`) | Bắn đồng thời lên **GA4** (`purchase`), **Google Ads** (`conversion` kèm Cart Data & Enhanced Conversions), **Meta Pixel** (`Purchase` kèm `eventID`) và **Meta CAPI** (`Purchase` kèm `event_id`). |
 
@@ -202,9 +205,9 @@ Plugin được thiết kế với **6 lớp bảo vệ độc lập** để đ�
 5. **Lớp 5 - Bảo vệ cửa sổ khử trùng lặp 48 giờ của Meta (`maybe_send_delayed_purchase`):**
    - Meta chỉ gộp (Deduplicate) sự kiện Pixel và CAPI trong vòng **48 giờ**.
    - Nếu một đơn hàng đã được bắn qua Pixel trình duyệt lúc mới đặt (`_woo_track_purchase_tracked` đã có), nhưng vài ngày sau (quá 48 giờ) Admin mới chuyển trạng thái đơn sang *Hoàn thành*, hàm `maybe_send_delayed_purchase()` sẽ tự động nhận diện đơn đã quá 48 giờ và **không bắn bù CAPI** nữa để tránh bị Meta tính thành đơn hàng thứ 2. (Ngược lại, nếu lúc đặt hàng khách dùng AdBlock khiến Pixel chưa từng bắn, CAPI vẫn sẽ gửi bù an toàn khi đơn hoàn tất).
-6. **Lớp 6 - Chống bắn đúp & bắn giả nút Thêm vào giỏ hàng (`isDuplicateAddToCart`):**
+6. **Lớp 6 - Chống bắn đúp & bắn giả nút Thêm vào giỏ hàng (`isDuplicateAddToCart` & Session TTL):**
    - Tự động vô hiệu hóa sự kiện click nếu nút *Thêm vào giỏ hàng* đang ở trạng thái `.disabled`, `.wc-variation-selection-needed` (chưa chọn thuộc tính biến thể), `.wc-variation-is-unavailable` (hết hàng) hoặc form chưa điền đủ trường bắt buộc (`checkValidity()`).
-   - Kết hợp bộ nhớ đệm 2 tầng: **In-memory (`2.5 giây`)** trên cùng trang và **`sessionStorage` (`30 giây` có tự động giải phóng khóa `consumeRecentAdd`)** giữa các lần chuyển trang, đảm bảo khi submit form truyền thống (dù hosting phản hồi chậm), sự kiện `AddToCart` chỉ nổ đúng 1 lần duy nhất.
+   - Kết hợp bộ nhớ đệm 2 tầng: **In-memory (`2.5 giây`)** trên cùng trang và **`sessionStorage` (`30 giây` có tự động giải phóng khóa `consumeRecentAdd`)** giữa các lần chuyển trang, cùng cơ chế chỉ lưu `WC()->session` cho request không phải AJAX/REST với thời hạn tự hủy **30 giây**, đảm bảo sự kiện `AddToCart` chỉ nổ đúng 1 lần duy nhất trong mọi tình huống.
 
 ---
 
@@ -224,6 +227,8 @@ Truy cập **WooCommerce $\rightarrow$ WooTrack (Google Suite)**:
    - **Kích hoạt Meta Pixel:** Tích chọn ✅.
    - **Kích hoạt Conversions API (CAPI):** Tích chọn ✅ và dán **CAPI Access Token** (lấy tại *Meta Events Manager $\rightarrow$ Cài đặt $\rightarrow$ Tạo Access Token*).
    - **Advanced Matching:** Tích chọn ✅.
+5. **Cấu hình Định danh Sản phẩm (`product_identifier`):**
+   - Chọn **`ID Sản phẩm cha (Parent ID)`** (Mặc định khuyên dùng cho sản phẩm số / Extension có nhiều gói biến thể 2 thiết bị, 5 thiết bị...), hoặc chọn *Variation/Post ID* / *Mã SKU* tùy theo cấu trúc Catalog của bạn.
 
 ### 6.2. Các cài đặt BẮT BUỘC kiểm tra trên Meta Ads & Google Ads
 * **Trên Meta Events Manager (Trình quản lý sự kiện $\rightarrow$ Cài đặt):**
