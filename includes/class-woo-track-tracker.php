@@ -39,6 +39,41 @@ class WooTrack_Tracker {
 
         // 7. In dataLayer payload vào footer (priority 15 chạy TRƯỚC priority 20 của scripts)
         add_action('wp_footer', array($this, 'render_footer_events'), 15);
+
+        // 8. Tự động tương thích với LiteSpeed Cache (Loại trừ script tracking khỏi bị Gộp/Nén/Trì hoãn làm rớt đơn)
+        add_filter('script_loader_tag', array($this, 'add_no_optimize_to_script_tag'), 10, 2);
+        add_filter('litespeed_optimize_js_excludes', array($this, 'exclude_from_litespeed_js'));
+        add_filter('litespeed_optm_js_defer_exc', array($this, 'exclude_from_litespeed_js'));
+    }
+
+    /**
+     * Gắn cờ data-no-optimize và data-no-defer cho file woo-track.js để LiteSpeed Cache & WP Rocket không trì hoãn
+     */
+    public function add_no_optimize_to_script_tag($tag, $handle) {
+        if ($handle === 'woo-track-script') {
+            return str_replace('<script ', '<script data-no-optimize="1" data-no-defer="1" ', $tag);
+        }
+        return $tag;
+    }
+
+    /**
+     * Tự động thêm danh sách loại trừ JS vào bộ lọc của plugin LiteSpeed Cache
+     */
+    public function exclude_from_litespeed_js($excludes) {
+        if (!is_array($excludes)) {
+            $excludes = array();
+        }
+        $tracking_patterns = array(
+            'woo-track.js',
+            'wooTrackConfig',
+            'wooTrackPayload',
+            'googletagmanager.com',
+            'connect.facebook.net',
+            'fbevents.js',
+            'fbq(',
+            'gtag(',
+        );
+        return array_unique(array_merge($excludes, $tracking_patterns));
     }
 
     /**
@@ -54,7 +89,7 @@ class WooTrack_Tracker {
         // 0. Khởi tạo tín hiệu Google Consent Mode v2 trước khi nạp GTM / gtag.js
         if ($consent_mode_v2 && (!empty($gtm_id) || !empty($ga4_id) || !empty($gads_id))) : ?>
 <!-- Google Consent Mode v2 (WooTrack) -->
-<script>
+<script data-no-optimize="1" data-no-defer="1">
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
   gtag('consent', 'default', {
@@ -70,7 +105,7 @@ class WooTrack_Tracker {
         // 1. Chèn Google Tag Manager (GTM)
         if (!empty($gtm_id)) : ?>
 <!-- Google Tag Manager (WooTrack) -->
-<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+<script data-no-optimize="1" data-no-defer="1">(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
 new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
 j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
@@ -83,8 +118,8 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
             $primary_id = !empty($ga4_id) ? $ga4_id : $gads_id;
             ?>
 <!-- Google tag (gtag.js) (WooTrack) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=<?php echo esc_attr($primary_id); ?>"></script>
-<script>
+<script data-no-optimize="1" data-no-defer="1" async src="https://www.googletagmanager.com/gtag/js?id=<?php echo esc_attr($primary_id); ?>"></script>
+<script data-no-optimize="1" data-no-defer="1">
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
   gtag('js', new Date());
@@ -113,7 +148,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
             $user_init_data = $adv_matching ? WooTrack_Helper::format_meta_advanced_matching_browser($current_order) : array();
             ?>
 <!-- Meta Pixel Code (WooTrack) -->
-<script>
+<script data-no-optimize="1" data-no-defer="1">
 !function(f,b,e,v,n,t,s)
 {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
 n.callMethod.apply(n,arguments):n.queue.push(arguments)};
@@ -775,7 +810,7 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
         );
 
         ?>
-        <script type="text/javascript" id="woo-track-initial-data">
+        <script type="text/javascript" id="woo-track-initial-data" data-no-optimize="1" data-no-defer="1">
             window.wooTrackPayload = <?php echo wp_json_encode($payload); ?>;
         </script>
         <?php

@@ -3,7 +3,7 @@
  * Plugin Name: WooTrack - All-in-One Tracker for WooCommerce (Google & Meta)
  * Plugin URI:  https://github.com/asksock/woo-track
  * Description: Bộ công cụ độc lập chuyên dụng tích hợp Google Tag Manager (GTM), GA4, Google Ads và Meta Pixel & Conversions API (CAPI) cho WooCommerce.
- * Version:     1.2.1
+ * Version:     1.2.3
  * Author:      AskSock
  * Author URI:  https://github.com/asksock
  * Text Domain: woo-track
