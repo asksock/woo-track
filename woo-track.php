@@ -1,15 +1,15 @@
 <?php
 /**
- * Plugin Name: WooTrack - All-in-One Google Tracker for WooCommerce
+ * Plugin Name: WooTrack - All-in-One Tracker for WooCommerce (Google & Meta)
  * Plugin URI:  https://github.com/asksock/woo-track
- * Description: Bộ công cụ độc lập chuyên dụng tích hợp Google Tag Manager (GTM), Google Analytics 4 (GA4) và Google Ads Conversion Tracking cho WooCommerce.
- * Version:     1.1.2
+ * Description: Bộ công cụ độc lập chuyên dụng tích hợp Google Tag Manager (GTM), GA4, Google Ads và Meta Pixel & Conversions API (CAPI) cho WooCommerce.
+ * Version:     1.2.1
  * Author:      AskSock
  * Author URI:  https://github.com/asksock
  * Text Domain: woo-track
  * Domain Path: /languages
  * Requires at least: 5.6
- * Requires PHP: 7.4
+ * Requires PHP: 8.0
  * WC requires at least: 5.0
  * WC tested up to: 8.5
  */
@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Định nghĩa các hằng số của plugin
-define('WOO_TRACK_VERSION', '1.1.2');
+define('WOO_TRACK_VERSION', '1.2.0');
 define('WOO_TRACK_FILE', __FILE__);
 define('WOO_TRACK_PATH', plugin_dir_path(__FILE__));
 define('WOO_TRACK_URL', plugin_dir_url(__FILE__));
@@ -75,6 +75,7 @@ final class WooTrack {
             new WooTrack_Settings();
         }
         new WooTrack_Tracker();
+        WooTrack_Meta_CAPI::init();
     }
 
     /**
@@ -83,6 +84,7 @@ final class WooTrack {
     private function includes() {
         require_once WOO_TRACK_PATH . 'includes/class-woo-track-helper.php';
         require_once WOO_TRACK_PATH . 'includes/class-woo-track-settings.php';
+        require_once WOO_TRACK_PATH . 'includes/class-woo-track-meta-capi.php';
         require_once WOO_TRACK_PATH . 'includes/class-woo-track-tracker.php';
     }
 

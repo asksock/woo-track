@@ -47,15 +47,35 @@ class WooTrack_Settings {
         // 3 Mã công cụ độc lập của Google
         $sanitized['gtm_id']  = isset($input['gtm_id']) ? sanitize_text_field(strtoupper(trim($input['gtm_id']))) : '';
         $sanitized['ga4_id']  = isset($input['ga4_id']) ? sanitize_text_field(strtoupper(trim($input['ga4_id']))) : '';
-        $sanitized['gads_id'] = isset($input['gads_id']) ? sanitize_text_field(strtoupper(trim($input['gads_id']))) : '';
 
-        // Google Ads Conversion Labels
-        $sanitized['purchase_label']       = isset($input['purchase_label']) ? sanitize_text_field(trim($input['purchase_label'])) : '';
-        $sanitized['begin_checkout_label'] = isset($input['begin_checkout_label']) ? sanitize_text_field(trim($input['begin_checkout_label'])) : '';
-        $sanitized['add_to_cart_label']    = isset($input['add_to_cart_label']) ? sanitize_text_field(trim($input['add_to_cart_label'])) : '';
+        $gads_id = isset($input['gads_id']) ? sanitize_text_field(strtoupper(trim($input['gads_id']))) : '';
+        if (!empty($gads_id) && is_numeric($gads_id)) {
+            $gads_id = 'AW-' . $gads_id;
+        }
+        $sanitized['gads_id'] = $gads_id;
+
+        // Google Ads Conversion Labels (tự làm sạch nếu dán kèm AW-XXXXX/)
+        foreach (array('purchase_label', 'begin_checkout_label', 'add_to_cart_label') as $lbl_key) {
+            if (isset($input[$lbl_key])) {
+                $val = sanitize_text_field(trim($input[$lbl_key]));
+                if (strpos($val, '/') !== false) {
+                    $parts = explode('/', $val);
+                    $val = end($parts);
+                }
+                $sanitized[$lbl_key] = $val;
+            } else {
+                $sanitized[$lbl_key] = '';
+            }
+        }
+
+        // Meta (Facebook) Pixel & Conversions API (CAPI)
+        $sanitized['meta_pixel_id']        = isset($input['meta_pixel_id']) ? sanitize_text_field(trim($input['meta_pixel_id'])) : '';
+        $sanitized['meta_capi_token']      = isset($input['meta_capi_token']) ? sanitize_textarea_field(trim($input['meta_capi_token'])) : '';
+        $sanitized['meta_test_event_code'] = isset($input['meta_test_event_code']) ? sanitize_text_field(trim($input['meta_test_event_code'])) : '';
+        $sanitized['meta_content_type']    = isset($input['meta_content_type']) && in_array($input['meta_content_type'], array('product', 'product_group')) ? $input['meta_content_type'] : 'product';
 
         // Định danh sản phẩm
-        $sanitized['product_identifier']   = isset($input['product_identifier']) && in_array($input['product_identifier'], array('id', 'sku')) ? $input['product_identifier'] : 'id';
+        $sanitized['product_identifier']   = isset($input['product_identifier']) && in_array($input['product_identifier'], array('parent_id', 'id', 'sku'), true) ? $input['product_identifier'] : 'parent_id';
 
         // Checkboxes
         $checkboxes = array(
@@ -65,12 +85,23 @@ class WooTrack_Settings {
             'enable_begin_checkout',
             'enable_purchase',
             'enable_enhanced_conversions',
+            'enable_consent_mode_v2',
+            'enable_meta_pixel',
+            'enable_meta_capi',
+            'enable_meta_advanced_matching',
+            'meta_event_view_content',
+            'meta_event_add_to_cart',
+            'meta_event_initiate_checkout',
+            'meta_event_purchase',
+            'meta_event_search',
             'debug_mode'
         );
 
         foreach ($checkboxes as $cb) {
             $sanitized[$cb] = !empty($input[$cb]) ? 'yes' : 'no';
         }
+
+        WooTrack_Helper::clear_settings_cache();
 
         return $sanitized;
     }
@@ -91,7 +122,22 @@ class WooTrack_Settings {
         $purchase_label       = isset($options['purchase_label']) ? $options['purchase_label'] : '';
         $begin_checkout_label = isset($options['begin_checkout_label']) ? $options['begin_checkout_label'] : '';
         $add_to_cart_label    = isset($options['add_to_cart_label']) ? $options['add_to_cart_label'] : '';
-        $product_identifier   = isset($options['product_identifier']) ? $options['product_identifier'] : 'id';
+        $product_identifier   = isset($options['product_identifier']) ? $options['product_identifier'] : 'parent_id';
+
+        // Meta (Facebook) Settings
+        $meta_pixel_id                 = isset($options['meta_pixel_id']) ? $options['meta_pixel_id'] : '';
+        $meta_capi_token               = isset($options['meta_capi_token']) ? $options['meta_capi_token'] : '';
+        $meta_test_event_code          = isset($options['meta_test_event_code']) ? $options['meta_test_event_code'] : '';
+        $meta_content_type             = isset($options['meta_content_type']) ? $options['meta_content_type'] : 'product';
+        $enable_meta_pixel             = isset($options['enable_meta_pixel']) ? $options['enable_meta_pixel'] : 'yes';
+        $enable_meta_capi              = isset($options['enable_meta_capi']) ? $options['enable_meta_capi'] : 'yes';
+        $enable_meta_advanced_matching = isset($options['enable_meta_advanced_matching']) ? $options['enable_meta_advanced_matching'] : 'yes';
+
+        $meta_event_view_content       = isset($options['meta_event_view_content']) ? $options['meta_event_view_content'] : 'yes';
+        $meta_event_add_to_cart        = isset($options['meta_event_add_to_cart']) ? $options['meta_event_add_to_cart'] : 'yes';
+        $meta_event_initiate_checkout  = isset($options['meta_event_initiate_checkout']) ? $options['meta_event_initiate_checkout'] : 'yes';
+        $meta_event_purchase           = isset($options['meta_event_purchase']) ? $options['meta_event_purchase'] : 'yes';
+        $meta_event_search             = isset($options['meta_event_search']) ? $options['meta_event_search'] : 'yes';
 
         $enable_view_item_list       = isset($options['enable_view_item_list']) ? $options['enable_view_item_list'] : 'yes';
         $enable_view_item            = isset($options['enable_view_item']) ? $options['enable_view_item'] : 'yes';
@@ -99,12 +145,13 @@ class WooTrack_Settings {
         $enable_begin_checkout       = isset($options['enable_begin_checkout']) ? $options['enable_begin_checkout'] : 'yes';
         $enable_purchase             = isset($options['enable_purchase']) ? $options['enable_purchase'] : 'yes';
         $enable_enhanced_conversions = isset($options['enable_enhanced_conversions']) ? $options['enable_enhanced_conversions'] : 'no';
+        $enable_consent_mode_v2      = isset($options['enable_consent_mode_v2']) ? $options['enable_consent_mode_v2'] : 'yes';
         $debug_mode                  = isset($options['debug_mode']) ? $options['debug_mode'] : 'no';
         ?>
         <div class="wrap" style="max-width: 950px;">
-            <h1><span class="dashicons dashicons-chart-bar" style="font-size:30px; margin-right:8px; vertical-align:middle;"></span><?php esc_html_e('WooTrack - Bộ Công Cụ Theo Dõi Độc Lập Google', 'woo-track'); ?></h1>
+            <h1><span class="dashicons dashicons-chart-bar" style="font-size:30px; margin-right:8px; vertical-align:middle;"></span><?php esc_html_e('WooTrack - Bộ Công Cụ Theo Dõi Độc Lập Toàn Diện', 'woo-track'); ?></h1>
             <p class="description" style="margin-bottom: 20px; font-size:14px;">
-                <?php esc_html_e('Tự động chèn mã và đồng bộ sự kiện E-commerce độc lập cho Google Tag Manager (GTM), Google Analytics 4 (GA4) và Google Ads mà không cần phụ thuộc vào bất kỳ plugin bên thứ 3 nào.', 'woo-track'); ?>
+                <?php esc_html_e('Tự động chèn mã và đồng bộ sự kiện E-commerce độc lập cho Google (GTM, GA4, Google Ads) và Meta (Meta Pixel & Conversions API CAPI) với cơ chế chống trùng lặp chuyển đổi tự động.', 'woo-track'); ?>
             </p>
 
             <form method="post" action="options.php" style="background:#fff; padding:25px 30px; border:1px solid #ccd0d4; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-radius:6px;">
@@ -184,25 +231,126 @@ class WooTrack_Settings {
                             <p class="description"><?php esc_html_e('Tự động gửi thông tin Email, Số điện thoại (chuẩn E.164) và Địa chỉ khi đặt hàng để Google Ads tự động băm SHA-256 khớp chuyển đổi chính xác nhất.', 'woo-track'); ?></p>
                         </td>
                     </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Google Consent Mode v2', 'woo-track'); ?></th>
+                        <td>
+                            <label>
+                                <input name="woo_track_settings[enable_consent_mode_v2]" type="checkbox" value="yes" <?php checked($enable_consent_mode_v2, 'yes'); ?> />
+                                <strong><?php esc_html_e('Gửi tín hiệu Consent Mode v2 mặc định (ad_user_data & ad_personalization = granted)', 'woo-track'); ?></strong>
+                            </label>
+                            <p class="description"><?php esc_html_e('Đáp ứng yêu cầu mới nhất của Google Ads & GA4 để tính năng Enhanced Conversions và Tiếp thị lại động (Dynamic Remarketing) hoạt động tối đa công suất.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
                 </table>
 
-                <!-- 4. SẢN PHẨM & SỰ KIỆN -->
-                <h2 style="border-bottom: 2px solid #5f6368; padding-bottom: 8px; margin-top:25px; color:#3c4043;">
-                    <span class="dashicons dashicons-cart" style="margin-right:6px;"></span>4. Cấu hình E-commerce & Danh sách Sự kiện
+                <!-- 4. META (FACEBOOK) PIXEL & CONVERSIONS API (CAPI) -->
+                <h2 style="border-bottom: 2px solid #0866ff; padding-bottom: 8px; margin-top:25px; color:#0866ff;">
+                    <span class="dashicons dashicons-facebook" style="margin-right:6px;"></span>4. Meta (Facebook) Pixel & Conversions API (CAPI)
                 </h2>
+                <p class="description"><?php esc_html_e('Theo dõi chuyển đổi kép (Browser + Server-side) chuẩn Meta với cơ chế tự động khử trùng lặp (Deduplication) qua eventID.', 'woo-track'); ?></p>
                 <table class="form-table">
                     <tr>
-                        <th scope="row"><label for="product_identifier"><?php esc_html_e('Định danh sản phẩm (item_id)', 'woo-track'); ?></label></th>
+                        <th scope="row"><label for="meta_pixel_id"><?php esc_html_e('Meta Pixel ID / Dataset ID', 'woo-track'); ?></label></th>
                         <td>
-                            <select name="woo_track_settings[product_identifier]" id="product_identifier">
-                                <option value="id" <?php selected($product_identifier, 'id'); ?>><?php esc_html_e('ID bài viết WordPress (Post ID - Ví dụ: 1042)', 'woo-track'); ?></option>
-                                <option value="sku" <?php selected($product_identifier, 'sku'); ?>><?php esc_html_e('Mã SKU sản phẩm (Nếu không có SKU sẽ dùng Post ID)', 'woo-track'); ?></option>
-                            </select>
-                            <p class="description"><?php esc_html_e('Chọn giá trị trùng khớp với nguồn cấp dữ liệu sản phẩm trên Google Merchant Center (GMC).', 'woo-track'); ?></p>
+                            <input name="woo_track_settings[meta_pixel_id]" type="text" id="meta_pixel_id" value="<?php echo esc_attr($meta_pixel_id); ?>" class="regular-text" placeholder="123456789012345" />
+                            <p class="description"><?php esc_html_e('ID điểm dữ liệu hoặc Pixel ID từ Meta Events Manager.', 'woo-track'); ?></p>
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row"><?php esc_html_e('Bật/Tắt sự kiện', 'woo-track'); ?></th>
+                        <th scope="row"><?php esc_html_e('Kích hoạt Meta Pixel', 'woo-track'); ?></th>
+                        <td>
+                            <label>
+                                <input name="woo_track_settings[enable_meta_pixel]" type="checkbox" value="yes" <?php checked($enable_meta_pixel, 'yes'); ?> />
+                                <strong><?php esc_html_e('Bật theo dõi Meta Pixel phía Trình duyệt (Browser)', 'woo-track'); ?></strong>
+                            </label>
+                            <p class="description"><?php esc_html_e('Tự động chèn Base Code chuẩn và bắn các sự kiện chuẩn (PageView, ViewContent, AddToCart, InitiateCheckout, Purchase).', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Conversions API (CAPI)', 'woo-track'); ?></th>
+                        <td>
+                            <label style="display:block; margin-bottom:10px;">
+                                <input name="woo_track_settings[enable_meta_capi]" type="checkbox" value="yes" <?php checked($enable_meta_capi, 'yes'); ?> />
+                                <strong><?php esc_html_e('Bật Meta Conversions API (Server-side)', 'woo-track'); ?></strong>
+                            </label>
+                            <label for="meta_capi_token"><strong><?php esc_html_e('CAPI Access Token:', 'woo-track'); ?></strong></label><br>
+                            <textarea name="woo_track_settings[meta_capi_token]" id="meta_capi_token" rows="3" class="large-text" placeholder="EAA... (Lấy tại Events Manager > Cài đặt > Tạo Access Token)"><?php echo esc_textarea($meta_capi_token); ?></textarea>
+                            <p class="description"><?php esc_html_e('Mã truy cập tạo từ Trình quản lý sự kiện của Meta để cho phép máy chủ gửi sự kiện chuyển đổi trực tiếp.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="meta_test_event_code"><?php esc_html_e('Test Event Code (Kiểm thử CAPI)', 'woo-track'); ?></label></th>
+                        <td>
+                            <input name="woo_track_settings[meta_test_event_code]" type="text" id="meta_test_event_code" value="<?php echo esc_attr($meta_test_event_code); ?>" class="regular-text" placeholder="TEST12345 (Tuỳ chọn)" />
+                            <p class="description"><?php esc_html_e('Nhập mã kiểm thử sự kiện trong tab "Thử nghiệm sự kiện" của Meta Events Manager để test máy chủ realtime. Xóa đi khi chạy thực tế.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Advanced Matching', 'woo-track'); ?></th>
+                        <td>
+                            <label>
+                                <input name="woo_track_settings[enable_meta_advanced_matching]" type="checkbox" value="yes" <?php checked($enable_meta_advanced_matching, 'yes'); ?> />
+                                <strong><?php esc_html_e('Bật Khớp đối tượng nâng cao (Meta Advanced Matching)', 'woo-track'); ?></strong>
+                            </label>
+                            <p class="description"><?php esc_html_e('Tự động băm SHA-256 Email, Số điện thoại và Địa chỉ khách hàng gửi kèm sự kiện để tối đa hóa điểm chất lượng khớp sự kiện (Event Match Quality).', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="meta_content_type"><?php esc_html_e('Loại nội dung (content_type)', 'woo-track'); ?></label></th>
+                        <td>
+                            <select name="woo_track_settings[meta_content_type]" id="meta_content_type">
+                                <option value="product" <?php selected($meta_content_type, 'product'); ?>><?php esc_html_e('product (Mặc định - Dành cho danh mục sản phẩm chuẩn)', 'woo-track'); ?></option>
+                                <option value="product_group" <?php selected($meta_content_type, 'product_group'); ?>><?php esc_html_e('product_group (Dành cho nhóm biến thể)', 'woo-track'); ?></option>
+                            </select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Các sự kiện Meta theo dõi', 'woo-track'); ?></th>
+                        <td>
+                            <fieldset>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[meta_event_view_content]" type="checkbox" value="yes" <?php checked($meta_event_view_content, 'yes'); ?> />
+                                    <strong>ViewContent:</strong> <?php esc_html_e('Xem chi tiết sản phẩm', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[meta_event_add_to_cart]" type="checkbox" value="yes" <?php checked($meta_event_add_to_cart, 'yes'); ?> />
+                                    <strong>AddToCart:</strong> <?php esc_html_e('Thêm vào giỏ hàng (Form chi tiết và AJAX)', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[meta_event_initiate_checkout]" type="checkbox" value="yes" <?php checked($meta_event_initiate_checkout, 'yes'); ?> />
+                                    <strong>InitiateCheckout:</strong> <?php esc_html_e('Bắt đầu thanh toán', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[meta_event_purchase]" type="checkbox" value="yes" <?php checked($meta_event_purchase, 'yes'); ?> />
+                                    <strong>Purchase:</strong> <?php esc_html_e('Mua hàng thành công (Kèm CAPI & Deduplication)', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[meta_event_search]" type="checkbox" value="yes" <?php checked($meta_event_search, 'yes'); ?> />
+                                    <strong>Search:</strong> <?php esc_html_e('Tìm kiếm sản phẩm trên website', 'woo-track'); ?>
+                                </label>
+                            </fieldset>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- 5. SẢN PHẨM & SỰ KIỆN CHUNG -->
+                <h2 style="border-bottom: 2px solid #5f6368; padding-bottom: 8px; margin-top:25px; color:#3c4043;">
+                    <span class="dashicons dashicons-cart" style="margin-right:6px;"></span>5. Cấu hình Định danh Sản phẩm
+                </h2>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="product_identifier"><?php esc_html_e('Định danh sản phẩm (item_id / content_id)', 'woo-track'); ?></label></th>
+                        <td>
+                            <select name="woo_track_settings[product_identifier]" id="product_identifier">
+                                <option value="parent_id" <?php selected($product_identifier, 'parent_id'); ?>><?php esc_html_e('ID Sản phẩm cha (Parent ID - Khuyên dùng cho Extension / Phần mềm có nhiều gói biến thể)', 'woo-track'); ?></option>
+                                <option value="id" <?php selected($product_identifier, 'id'); ?>><?php esc_html_e('ID riêng từng Biến thể / Bài viết (Variation / Post ID - Ví dụ: 1042)', 'woo-track'); ?></option>
+                                <option value="sku" <?php selected($product_identifier, 'sku'); ?>><?php esc_html_e('Mã SKU sản phẩm (Nếu không có SKU sẽ dùng ID)', 'woo-track'); ?></option>
+                            </select>
+                            <p class="description"><?php esc_html_e('Chọn "ID Sản phẩm cha" giúp đồng nhất mã sản phẩm xuyên suốt từ bước Xem sản phẩm -> Thêm giỏ hàng -> Mua hàng, trong khi Giá tiền (value/price) và Tên gói (item_variant) vẫn tự động lấy chính xác theo gói biến thể khách chọn.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Sự kiện Google Analytics / GTM', 'woo-track'); ?></th>
                         <td>
                             <fieldset>
                                 <label style="display:block; margin-bottom:8px;">
@@ -230,9 +378,9 @@ class WooTrack_Settings {
                     </tr>
                 </table>
 
-                <!-- 5. DEBUG MODE -->
+                <!-- 6. DEBUG MODE -->
                 <h2 style="border-bottom: 2px solid #5f6368; padding-bottom: 8px; margin-top:25px; color:#3c4043;">
-                    <span class="dashicons dashicons-admin-tools" style="margin-right:6px;"></span>5. Chế độ Kiểm thử (Debug Mode)
+                    <span class="dashicons dashicons-admin-tools" style="margin-right:6px;"></span>6. Chế độ Kiểm thử (Debug Mode)
                 </h2>
                 <table class="form-table">
                     <tr>
@@ -240,7 +388,7 @@ class WooTrack_Settings {
                         <td>
                             <label>
                                 <input name="woo_track_settings[debug_mode]" type="checkbox" value="yes" <?php checked($debug_mode, 'yes'); ?> />
-                                <?php esc_html_e('Bật Debug Console (In toàn bộ sự kiện và dữ liệu ra F12 Developer Tools)', 'woo-track'); ?>
+                                <?php esc_html_e('Bật Debug Console (In toàn bộ sự kiện Google & Meta ra F12 Developer Tools và ghi log CAPI)', 'woo-track'); ?>
                             </label>
                         </td>
                     </tr>

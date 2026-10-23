@@ -12,11 +12,26 @@ if (!defined('ABSPATH')) {
 class WooTrack_Helper {
 
     /**
+     * Bộ nhớ đệm (Static Cache) lưu cài đặt trong suốt vòng đời 1 request để tránh gọi get_option() lặp lại
+     */
+    private static $settings_cache = null;
+
+    /**
      * Lấy cài đặt theo key
      */
     public static function get_setting($key, $default = '') {
-        $options = get_option('woo_track_settings', array());
-        return isset($options[$key]) ? $options[$key] : $default;
+        if (self::$settings_cache === null) {
+            $options = get_option('woo_track_settings', array());
+            self::$settings_cache = is_array($options) ? $options : array();
+        }
+        return isset(self::$settings_cache[$key]) ? self::$settings_cache[$key] : $default;
+    }
+
+    /**
+     * Làm mới cache cài đặt khi Admin lưu cấu hình mới
+     */
+    public static function clear_settings_cache() {
+        self::$settings_cache = null;
     }
 
     /**
@@ -29,24 +44,56 @@ class WooTrack_Helper {
     }
 
     /**
-     * Lấy ID sản phẩm dựa trên cài đặt (Post ID hay SKU)
-     * Thích hợp với Google Merchant Center (GMC) cho Dynamic Remarketing
+     * Lấy ID sản phẩm dựa trên cài đặt (Parent ID, Post/Variation ID hay SKU)
+     * Hỗ trợ đồng nhất ID sản phẩm cha cho mô hình bán Extension/Phần mềm chia gói biến thể
      */
     public static function get_product_identifier($product) {
         if (!$product instanceof WC_Product) {
             return '';
         }
 
-        $identifier_type = self::get_setting('product_identifier', 'id');
+        $identifier_type = self::get_setting('product_identifier', 'parent_id');
 
         if ($identifier_type === 'sku') {
             $sku = $product->get_sku();
             if (!empty($sku)) {
-                return $sku;
+                return (string) $sku;
+            }
+        }
+
+        if ($identifier_type === 'parent_id' && $product->is_type('variation')) {
+            $parent_id = $product->get_parent_id();
+            if ($parent_id > 0) {
+                return (string) $parent_id;
             }
         }
 
         return (string) $product->get_id();
+    }
+
+    /**
+     * Chuẩn hóa chuỗi send_to cho Google Ads (AW-XXXXX/LABEL), tự làm sạch nếu khách dán cả chuỗi
+     */
+    public static function format_gads_send_to($gads_id, $label) {
+        $gads_id = trim((string) $gads_id);
+        $label   = trim((string) $label);
+
+        if (empty($gads_id) || empty($label)) {
+            return '';
+        }
+
+        // Tự động thêm AW- nếu gads_id chỉ chứa số
+        if (is_numeric($gads_id)) {
+            $gads_id = 'AW-' . $gads_id;
+        }
+
+        // Tự bóc tách phần nhãn nếu người dùng dán cả chuỗi dạng 'AW-XXXX/LABEL'
+        if (strpos($label, '/') !== false) {
+            $parts = explode('/', $label);
+            $label = end($parts);
+        }
+
+        return rtrim($gads_id, '/') . '/' . ltrim($label, '/');
     }
 
     /**
@@ -57,17 +104,22 @@ class WooTrack_Helper {
             return array();
         }
 
-        $categories = wc_get_product_terms($product->get_id(), 'product_cat', array('fields' => 'names'));
-        $category = !empty($categories) && !is_wp_error($categories) ? $categories[0] : '';
+        // Với sản phẩm biến thể, lấy danh mục từ sản phẩm cha
+        $cat_prod_id = $product->is_type('variation') ? $product->get_parent_id() : $product->get_id();
+        $categories  = wc_get_product_terms($cat_prod_id, 'product_cat', array('fields' => 'names'));
+        $category    = !empty($categories) && !is_wp_error($categories) ? $categories[0] : '';
 
-        $price = (float) wc_get_price_to_display($product);
+        $price   = (float) wc_get_price_to_display($product);
+        $prod_id = self::get_product_identifier($product);
 
         $item = array(
-            'item_id'       => self::get_product_identifier($product),
-            'item_name'     => $product->get_name(),
-            'price'         => round($price, 2),
-            'quantity'      => (int) $quantity,
-            'index'         => (int) $index,
+            'id'                       => $prod_id,
+            'item_id'                  => $prod_id,
+            'item_name'                => $product->get_name(),
+            'price'                    => round($price, 2),
+            'quantity'                 => (int) $quantity,
+            'index'                    => (int) $index,
+            'google_business_vertical' => 'retail',
         );
 
         if (!empty($category)) {
@@ -76,11 +128,133 @@ class WooTrack_Helper {
 
         // Nếu là biến thể sản phẩm
         if ($product->is_type('variation')) {
-            $parent_id = $product->get_parent_id();
-            $item['item_variant'] = implode(', ', $product->get_attributes());
+            $raw_attrs = $product->get_attributes();
+            if (is_array($raw_attrs)) {
+                $clean_attrs = array_filter($raw_attrs, function ($val) {
+                    return is_scalar($val) && trim((string) $val) !== '';
+                });
+                if (!empty($clean_attrs)) {
+                    $item['item_variant'] = implode(', ', $clean_attrs);
+                }
+            }
         }
 
         return $item;
+    }
+
+    /**
+     * Chuyển chuỗi về chữ thường hỗ trợ đầy đủ UTF-8 (Tiếng Việt có dấu) trên PHP 8.x
+     */
+    public static function strtolower_utf8($str) {
+        $str = trim((string) $str);
+        if ($str === '') {
+            return '';
+        }
+        return function_exists('mb_strtolower') ? mb_strtolower($str, 'UTF-8') : strtolower($str);
+    }
+
+    /**
+     * Chuẩn hóa số điện thoại theo mã quốc gia (E.164 có dấu + hoặc chỉ chữ số cho Meta)
+     */
+    public static function normalize_phone($raw_phone, $country = 'VN', $with_plus = true) {
+        $raw_phone = preg_replace('/[^0-9+]/', '', (string) $raw_phone);
+        if (empty($raw_phone)) {
+            return '';
+        }
+
+        $country = strtoupper(trim((string) $country));
+        if (empty($country)) {
+            $country = 'VN';
+        }
+
+        $calling_codes = array(
+            'VN' => '84',
+            'US' => '1',
+            'CA' => '1',
+            'GB' => '44',
+            'AU' => '61',
+            'SG' => '65',
+            'MY' => '60',
+            'TH' => '66',
+            'JP' => '81',
+            'KR' => '82',
+            'DE' => '49',
+            'FR' => '33',
+        );
+        $prefix = isset($calling_codes[$country]) ? $calling_codes[$country] : '84';
+
+        if (strpos($raw_phone, '+') === 0) {
+            $digits = preg_replace('/[^0-9]/', '', substr($raw_phone, 1));
+        } elseif (strpos($raw_phone, '00') === 0) {
+            $digits = preg_replace('/[^0-9]/', '', substr($raw_phone, 2));
+        } else {
+            $digits = preg_replace('/[^0-9]/', '', $raw_phone);
+            if (strpos($digits, '0') === 0) {
+                $digits = $prefix . substr($digits, 1);
+            } elseif (strpos($digits, $prefix) !== 0) {
+                $digits = $prefix . $digits;
+            }
+        }
+
+        if (empty($digits)) {
+            return '';
+        }
+
+        return $with_plus ? ('+' . $digits) : $digits;
+    }
+
+    /**
+     * Kiểm tra đơn hàng có hợp lệ để ghi nhận chuyển đổi Purchase không (Tránh bắn đơn lỗi/hủy)
+     */
+    public static function is_order_valid_for_purchase_tracking($order) {
+        if (!$order instanceof WC_Order) {
+            return false;
+        }
+
+        $invalid_statuses = array('failed', 'cancelled', 'refunded', 'trash', 'checkout-draft');
+        if ($order->has_status($invalid_statuses)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Lấy đối tượng WC_Order hợp lệ trên trang Thank You (Xác thực order_key chống lộ PII & bắn giả)
+     */
+    public static function get_valid_thankyou_order($order_id = 0) {
+        if ($order_id <= 0) {
+            global $wp;
+            if (isset($wp->query_vars['order-received'])) {
+                $order_id = absint($wp->query_vars['order-received']);
+            } elseif (isset($_GET['order-received'])) {
+                $order_id = absint($_GET['order-received']);
+            }
+        }
+
+        if ($order_id <= 0) {
+            return null;
+        }
+
+        $order = wc_get_order($order_id);
+        if (!$order instanceof WC_Order) {
+            return null;
+        }
+
+        // Xác thực order key từ URL hoặc chủ sở hữu đơn hàng đang đăng nhập
+        $order_key = isset($_GET['key']) ? wc_clean(wp_unslash($_GET['key'])) : '';
+        if (!empty($order_key)) {
+            if (!$order->key_is_valid($order_key)) {
+                return null;
+            }
+        } else {
+            $current_user_id = get_current_user_id();
+            if ($current_user_id <= 0 || (int) $order->get_customer_id() !== (int) $current_user_id) {
+                return null;
+            }
+        }
+
+        return $order;
     }
 
     /**
@@ -113,9 +287,49 @@ class WooTrack_Helper {
             'currency'       => $order->get_currency(),
             'tax'            => round((float) $order->get_total_tax(), 2),
             'shipping'       => round((float) $order->get_shipping_total(), 2),
+            'discount'       => round((float) $order->get_discount_total(), 2),
             'coupon'         => !empty($coupons) ? implode(', ', $coupons) : '',
+            'new_customer'   => self::is_new_customer($order),
             'items'          => $items,
         );
+    }
+
+    /**
+     * Kiểm tra khách hàng trong đơn hàng là khách mới (true) hay khách quay lại (false) cho Google Ads
+     */
+    public static function is_new_customer($order) {
+        if (!$order instanceof WC_Order) {
+            return true;
+        }
+
+        $customer_id   = (int) $order->get_customer_id();
+        $billing_email = self::strtolower_utf8($order->get_billing_email());
+
+        $query_args = array(
+            'limit'   => 1,
+            'return'  => 'ids',
+            'exclude' => array($order->get_id()),
+            'status'  => array('wc-processing', 'wc-completed', 'processing', 'completed'),
+        );
+
+        if ($customer_id > 0) {
+            $query_args['customer_id'] = $customer_id;
+            $existing = wc_get_orders($query_args);
+            if (!empty($existing)) {
+                return false;
+            }
+            unset($query_args['customer_id']);
+        }
+
+        if (!empty($billing_email) && is_email($billing_email)) {
+            $query_args['billing_email'] = $billing_email;
+            $existing_by_email = wc_get_orders($query_args);
+            if (!empty($existing_by_email)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -128,8 +342,9 @@ class WooTrack_Helper {
             return array();
         }
 
-        $email = trim(strtolower($order->get_billing_email()));
-        $raw_phone = preg_replace('/[^0-9+]/', '', $order->get_billing_phone());
+        $email = self::strtolower_utf8($order->get_billing_email());
+        $country = trim(strtoupper((string) $order->get_billing_country()));
+        $e164_phone = self::normalize_phone($order->get_billing_phone(), $country, true);
 
         $user_data = array();
 
@@ -137,30 +352,16 @@ class WooTrack_Helper {
             $user_data['email'] = $email;
         }
 
-        if (!empty($raw_phone)) {
-            // Chuẩn hóa số điện thoại theo chuẩn quốc tế E.164 của Google
-            $country = strtoupper($order->get_billing_country());
-            $e164_phone = $raw_phone;
-
-            if (strpos($e164_phone, '+') !== 0) {
-                if (substr($e164_phone, 0, 1) === '0') {
-                    // Mặc định số VN nếu quốc gia là VN hoặc để trống
-                    $prefix = ($country === 'VN' || empty($country)) ? '+84' : '+84';
-                    $e164_phone = $prefix . substr($e164_phone, 1);
-                } else {
-                    $e164_phone = '+84' . $e164_phone;
-                }
-            }
+        if (!empty($e164_phone)) {
             $user_data['phone_number'] = $e164_phone;
         }
 
-        $first_name = trim($order->get_billing_first_name());
-        $last_name  = trim($order->get_billing_last_name());
-        $street     = trim($order->get_billing_address_1());
-        $city       = trim($order->get_billing_city());
-        $state      = trim($order->get_billing_state());
-        $country    = trim(strtoupper($order->get_billing_country()));
-        $postcode   = trim($order->get_billing_postcode());
+        $first_name = trim((string) $order->get_billing_first_name());
+        $last_name  = trim((string) $order->get_billing_last_name());
+        $street     = trim((string) $order->get_billing_address_1());
+        $city       = trim((string) $order->get_billing_city());
+        $state      = trim((string) $order->get_billing_state());
+        $postcode   = trim((string) $order->get_billing_postcode());
 
         $address = array();
         if (!empty($first_name)) $address['first_name']  = $first_name;
@@ -176,5 +377,383 @@ class WooTrack_Helper {
         }
 
         return $user_data;
+    }
+
+    /**
+     * Kiểm tra Meta Pixel có được bật và có Pixel ID không
+     */
+    public static function is_meta_enabled() {
+        $pixel_id = trim(self::get_setting('meta_pixel_id', ''));
+        $enabled  = self::get_setting('enable_meta_pixel', 'yes') === 'yes';
+        return !empty($pixel_id) && $enabled;
+    }
+
+    /**
+     * Kiểm tra Meta Conversions API (CAPI) có được bật không
+     */
+    public static function is_meta_capi_enabled() {
+        if (!self::is_meta_enabled()) {
+            return false;
+        }
+        $capi_token = trim(self::get_setting('meta_capi_token', ''));
+        $enabled    = self::get_setting('enable_meta_capi', 'yes') === 'yes';
+        return !empty($capi_token) && $enabled;
+    }
+
+    /**
+     * Kiểm tra sự kiện Meta có được bật không
+     */
+    public static function is_meta_event_enabled($event_name) {
+        if (!self::is_meta_enabled()) {
+            return false;
+        }
+        $key = 'meta_event_' . strtolower($event_name);
+        $val = self::get_setting($key, 'yes');
+        return ($val === 'yes' || $val === '1' || $val === true);
+    }
+
+    /**
+     * Lấy loại nội dung Meta: product hoặc product_group
+     */
+    public static function get_meta_content_type() {
+        return self::get_setting('meta_content_type', 'product');
+    }
+
+    /**
+     * Lấy địa chỉ IP thật của khách hàng
+     */
+    public static function get_client_ip() {
+        $ip_keys = array('HTTP_CF_CONNECTING_IP', 'HTTP_X_REAL_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR');
+        foreach ($ip_keys as $key) {
+            if (!empty($_SERVER[$key])) {
+                $ip_list = explode(',', sanitize_text_field(wp_unslash($_SERVER[$key])));
+                $ip = trim($ip_list[0]);
+                if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                    return $ip;
+                }
+            }
+        }
+        return '';
+    }
+
+    /**
+     * Lấy User Agent của trình duyệt
+     */
+    public static function get_client_user_agent() {
+        return isset($_SERVER['HTTP_USER_AGENT']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_USER_AGENT'])) : '';
+    }
+
+    /**
+     * Lấy cookie _fbp của Meta
+     */
+    public static function get_fbp() {
+        return isset($_COOKIE['_fbp']) ? sanitize_text_field(wp_unslash($_COOKIE['_fbp'])) : '';
+    }
+
+    /**
+     * Lấy cookie _fbc của Meta hoặc dựng từ tham số fbclid nếu có
+     */
+    public static function get_fbc() {
+        $cookie_fbc = !empty($_COOKIE['_fbc']) ? sanitize_text_field(wp_unslash($_COOKIE['_fbc'])) : '';
+        if (!empty($_GET['fbclid'])) {
+            $fbclid = sanitize_text_field(wp_unslash($_GET['fbclid']));
+            $suffix = '.' . $fbclid;
+            if (empty($cookie_fbc) || substr($cookie_fbc, -strlen($suffix)) !== $suffix) {
+                return 'fb.1.' . (int) round(microtime(true) * 1000) . '.' . $fbclid;
+            }
+        }
+        return $cookie_fbc;
+    }
+
+    /**
+     * Chuẩn hóa và băm SHA-256 dữ liệu người dùng theo chuẩn Meta CAPI
+     */
+    public static function hash_meta_value($value, $type = '', $country = 'VN') {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return '';
+        }
+
+        switch ($type) {
+            case 'em':
+                $value = self::strtolower_utf8($value);
+                break;
+            case 'ph':
+                $value = self::normalize_phone($value, $country, false);
+                break;
+            case 'fn':
+            case 'ln':
+            case 'ct':
+            case 'st':
+                $value = self::strtolower_utf8(preg_replace('/[\s\p{P}]/u', '', $value));
+                break;
+            case 'zp':
+                $value = self::strtolower_utf8(preg_replace('/[\s-]/', '', $value));
+                break;
+            case 'country':
+                $value = self::strtolower_utf8($value);
+                break;
+            default:
+                $value = self::strtolower_utf8($value);
+                break;
+        }
+
+        if ($value === '') {
+            return '';
+        }
+
+        return hash('sha256', $value);
+    }
+
+    /**
+     * Format mảng contents chuẩn Meta Pixel & CAPI
+     */
+    public static function format_meta_contents_from_items($items) {
+        $contents = array();
+        if (empty($items) || !is_array($items)) {
+            return $contents;
+        }
+
+        foreach ($items as $item) {
+            $contents[] = array(
+                'id'         => (string) $item['item_id'],
+                'quantity'   => (int) $item['quantity'],
+                'item_price' => (float) $item['price'],
+            );
+        }
+
+        return $contents;
+    }
+
+    /**
+     * Format dữ liệu sản phẩm đơn cho Meta Pixel (ViewContent, AddToCart)
+     */
+    public static function format_meta_product_data($product, $quantity = 1) {
+        if (!$product instanceof WC_Product) {
+            return array();
+        }
+
+        $item_data = self::format_product_item($product, $quantity, 1);
+        $total_val = round((float) $item_data['price'] * (int) $quantity, 2);
+
+        $cat_prod_id = $product->is_type('variation') ? $product->get_parent_id() : $product->get_id();
+        $categories  = wc_get_product_terms($cat_prod_id, 'product_cat', array('fields' => 'names'));
+        $category    = !empty($categories) && !is_wp_error($categories) ? $categories[0] : '';
+
+        return array(
+            'content_name'     => $product->get_name(),
+            'content_category' => $category,
+            'content_ids'      => array((string) $item_data['item_id']),
+            'content_type'     => self::get_meta_content_type(),
+            'value'            => $total_val,
+            'currency'         => get_woocommerce_currency(),
+            'contents'         => array(
+                array(
+                    'id'         => (string) $item_data['item_id'],
+                    'quantity'   => (int) $quantity,
+                    'item_price' => (float) $item_data['price'],
+                ),
+            ),
+        );
+    }
+
+    /**
+     * Format dữ liệu đơn hàng cho Meta (Purchase)
+     */
+    public static function format_meta_order_data($order) {
+        if (!$order instanceof WC_Order) {
+            return array();
+        }
+
+        $order_data  = self::format_order_data($order);
+        $content_ids = array();
+        foreach ($order_data['items'] as $item) {
+            $content_ids[] = (string) $item['item_id'];
+        }
+        $content_ids = array_values(array_unique($content_ids));
+
+        return array(
+            'content_type' => self::get_meta_content_type(),
+            'content_ids'  => $content_ids,
+            'contents'     => self::format_meta_contents_from_items($order_data['items']),
+            'value'        => (float) $order_data['value'],
+            'currency'     => $order_data['currency'],
+            'num_items'    => (int) $order->get_item_count(),
+            'order_id'     => (string) $order->get_order_number(),
+        );
+    }
+
+    /**
+     * Tạo dữ liệu user_data cho Meta Conversions API (CAPI)
+     */
+    public static function format_meta_user_data_for_capi($order) {
+        if (!$order instanceof WC_Order) {
+            return array();
+        }
+
+        $user_data = array();
+
+        // Email
+        $email = trim((string) $order->get_billing_email());
+        if (!empty($email) && is_email($email)) {
+            $hashed_email = self::hash_meta_value($email, 'em');
+            if (!empty($hashed_email)) {
+                $user_data['em'] = array($hashed_email);
+            }
+        }
+
+        // Phone
+        $country = trim((string) $order->get_billing_country());
+        $phone   = (string) $order->get_billing_phone();
+        if (!empty($phone)) {
+            $hashed_phone = self::hash_meta_value($phone, 'ph', $country ?: 'VN');
+            if (!empty($hashed_phone)) {
+                $user_data['ph'] = array($hashed_phone);
+            }
+        }
+
+        // First Name
+        $fn = trim((string) $order->get_billing_first_name());
+        if (!empty($fn)) {
+            $hashed_fn = self::hash_meta_value($fn, 'fn');
+            if (!empty($hashed_fn)) {
+                $user_data['fn'] = array($hashed_fn);
+            }
+        }
+
+        // Last Name
+        $ln = trim((string) $order->get_billing_last_name());
+        if (!empty($ln)) {
+            $hashed_ln = self::hash_meta_value($ln, 'ln');
+            if (!empty($hashed_ln)) {
+                $user_data['ln'] = array($hashed_ln);
+            }
+        }
+
+        // City
+        $city = trim((string) $order->get_billing_city());
+        if (!empty($city)) {
+            $hashed_ct = self::hash_meta_value($city, 'ct');
+            if (!empty($hashed_ct)) {
+                $user_data['ct'] = array($hashed_ct);
+            }
+        }
+
+        // State
+        $state = trim((string) $order->get_billing_state());
+        if (!empty($state)) {
+            $hashed_st = self::hash_meta_value($state, 'st');
+            if (!empty($hashed_st)) {
+                $user_data['st'] = array($hashed_st);
+            }
+        }
+
+        // Zip
+        $zip = trim((string) $order->get_billing_postcode());
+        if (!empty($zip)) {
+            $hashed_zp = self::hash_meta_value($zip, 'zp');
+            if (!empty($hashed_zp)) {
+                $user_data['zp'] = array($hashed_zp);
+            }
+        }
+
+        // Country
+        if (!empty($country)) {
+            $hashed_country = self::hash_meta_value($country, 'country');
+            if (!empty($hashed_country)) {
+                $user_data['country'] = array($hashed_country);
+            }
+        }
+
+        // External ID (Customer ID)
+        $customer_id = $order->get_customer_id();
+        if ($customer_id > 0) {
+            $user_data['external_id'] = array(self::hash_meta_value((string) $customer_id));
+        }
+
+        // Kiểm tra xem có đang thực thi trực tiếp trên trình duyệt của khách hàng hay không (Tránh lấy nhầm IP/Cookie của Admin hoặc Webhook)
+        $is_customer_request = !is_admin() && !wp_doing_cron() && (!defined('REST_REQUEST') || !REST_REQUEST);
+
+        // Client IP & User Agent (ưu tiên lấy từ order meta đã lưu hoặc thông tin gốc trên WC_Order)
+        $saved_ip = (string) $order->get_meta('_woo_track_meta_ip');
+        if (empty($saved_ip)) {
+            $saved_ip = (string) $order->get_customer_ip_address();
+        }
+        $ip = !empty($saved_ip) ? $saved_ip : ($is_customer_request ? self::get_client_ip() : '');
+        if (!empty($ip)) {
+            $user_data['client_ip_address'] = $ip;
+        }
+
+        $saved_ua = (string) $order->get_meta('_woo_track_meta_ua');
+        if (empty($saved_ua)) {
+            $saved_ua = (string) $order->get_customer_user_agent();
+        }
+        $ua = !empty($saved_ua) ? $saved_ua : ($is_customer_request ? self::get_client_user_agent() : '');
+        if (!empty($ua)) {
+            $user_data['client_user_agent'] = $ua;
+        }
+
+        // Cookie _fbp & _fbc (chỉ fallback sang $_COOKIE nếu là request trực tiếp từ trình duyệt của khách)
+        $saved_fbp = (string) $order->get_meta('_woo_track_meta_fbp');
+        $fbp = !empty($saved_fbp) ? $saved_fbp : ($is_customer_request ? self::get_fbp() : '');
+        if (!empty($fbp)) {
+            $user_data['fbp'] = $fbp;
+        }
+
+        $saved_fbc = (string) $order->get_meta('_woo_track_meta_fbc');
+        $fbc = !empty($saved_fbc) ? $saved_fbc : ($is_customer_request ? self::get_fbc() : '');
+        if (!empty($fbc)) {
+            $user_data['fbc'] = $fbc;
+        }
+
+        return $user_data;
+    }
+
+    /**
+     * Format dữ liệu Advanced Matching cho Meta Pixel trên trình duyệt (fbq('init', id, {...}))
+     */
+    public static function format_meta_advanced_matching_browser($order_or_user = null) {
+        $data = array();
+
+        if ($order_or_user instanceof WC_Order) {
+            $ctry  = self::strtolower_utf8($order_or_user->get_billing_country());
+            $email = self::strtolower_utf8($order_or_user->get_billing_email());
+            $phone = self::normalize_phone($order_or_user->get_billing_phone(), $ctry ?: 'VN', false);
+            $fn    = self::strtolower_utf8($order_or_user->get_billing_first_name());
+            $ln    = self::strtolower_utf8($order_or_user->get_billing_last_name());
+            $city  = self::strtolower_utf8($order_or_user->get_billing_city());
+            $state = self::strtolower_utf8($order_or_user->get_billing_state());
+            $zip   = self::strtolower_utf8(preg_replace('/[\s-]/', '', (string) $order_or_user->get_billing_postcode()));
+
+            if (!empty($email) && is_email($email)) $data['em'] = $email;
+            if (!empty($phone)) $data['ph'] = $phone;
+            if (!empty($fn)) $data['fn'] = $fn;
+            if (!empty($ln)) $data['ln'] = $ln;
+            if (!empty($city)) $data['ct'] = $city;
+            if (!empty($state)) $data['st'] = $state;
+            if (!empty($zip)) $data['zp'] = $zip;
+            if (!empty($ctry)) $data['country'] = $ctry;
+
+            $customer_id = $order_or_user->get_customer_id();
+            if ($customer_id > 0) {
+                $data['external_id'] = (string) $customer_id;
+            }
+        } elseif (is_user_logged_in()) {
+            $current_user = wp_get_current_user();
+            if ($current_user && $current_user->ID) {
+                if (!empty($current_user->user_email)) {
+                    $data['em'] = self::strtolower_utf8($current_user->user_email);
+                }
+                if (!empty($current_user->first_name)) {
+                    $data['fn'] = self::strtolower_utf8($current_user->first_name);
+                }
+                if (!empty($current_user->last_name)) {
+                    $data['ln'] = self::strtolower_utf8($current_user->last_name);
+                }
+                $data['external_id'] = (string) $current_user->ID;
+            }
+        }
+
+        return $data;
     }
 }
