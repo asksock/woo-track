@@ -730,6 +730,11 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
     }
 
     public function render_footer_events() {
+        // Fallback chèn thẻ <noscript> nếu giao diện (theme) cũ không gọi hook wp_body_open()
+        if (!did_action('wp_body_open')) {
+            $this->inject_body_tags();
+        }
+
         // Đảm bảo begin_checkout / InitiateCheckout luôn được chuẩn bị trên trang checkout
         if (is_checkout() && !is_order_received_page()) {
             $has_begin_checkout = false;
