@@ -28,6 +28,7 @@ woo-track/
 └── includes/
     ├── class-woo-track-helper.php    # Lớp tiện ích lõi: Chuẩn hóa dữ liệu E-commerce, chuẩn hóa SĐT E.164, UTF-8 & băm SHA-256
     ├── class-woo-track-meta-capi.php # Lớp Server-side CAPI: Bắt fbclid, lưu Order Meta, khóa Atomic Lock & gửi Graph API v22.0
+    ├── class-woo-track-feed.php      # Lớp Product Feed: Xuất XML/CSV chuẩn mới nhất cho Meta Catalog & Google Merchant Center
     ├── class-woo-track-settings.php  # Lớp Quản trị (Admin UI): Quản lý và làm sạch (sanitize) toàn bộ cấu hình trong WooCommerce
     └── class-woo-track-tracker.php   # Lớp Điều phối (Orchestrator): Chèn thẻ <head>/<body>, bắt vòng đời trang & gom hàng đợi sự kiện
 ```
@@ -229,6 +230,10 @@ Truy cập **WooCommerce $\rightarrow$ WooTrack (Google Suite)**:
    - **Advanced Matching:** Tích chọn ✅.
 5. **Cấu hình Định danh Sản phẩm (`product_identifier`):**
    - Chọn **`ID Sản phẩm cha (Parent ID)`** (Mặc định khuyên dùng cho sản phẩm số / Extension có nhiều gói biến thể 2 thiết bị, 5 thiết bị...), hoặc chọn *Variation/Post ID* / *Mã SKU* tùy theo cấu trúc Catalog của bạn.
+6. **Nguồn Cấp Dữ Liệu Sản Phẩm (`WooTrack_Feed` - XML / CSV Feed cho Meta & Google):**
+   - **Meta Catalog XML / CSV:** `/?woo_track_feed=meta` và `/?woo_track_feed=meta&format=csv` (Chuẩn `<g:availability>in stock</g:availability>` của Meta).
+   - **Google Merchant Center XML / CSV:** `/?woo_track_feed=google` và `/?woo_track_feed=google&format=csv` (Chuẩn `<g:availability>in_stock</g:availability>` và `<g:identifier_exists>no</g:identifier_exists>` của Google).
+   - **Cơ chế Smart Cache + Realtime Invalidation (0% tải CPU):** Lưu bộ đệm Transient 6 giờ giúp bot quét trong 1ms mà không truy vấn SQL lặp lại; tự động xóa cache và cập nhật Realtime ngay lập tức khi Admin thêm/sửa/xóa sản phẩm.
 
 ### 6.2. Các cài đặt BẮT BUỘC kiểm tra trên Meta Ads & Google Ads
 * **Trên Meta Events Manager (Trình quản lý sự kiện $\rightarrow$ Cài đặt):**

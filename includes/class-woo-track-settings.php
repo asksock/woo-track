@@ -94,6 +94,7 @@ class WooTrack_Settings {
             'meta_event_initiate_checkout',
             'meta_event_purchase',
             'meta_event_search',
+            'enable_product_feed',
             'debug_mode'
         );
 
@@ -146,6 +147,7 @@ class WooTrack_Settings {
         $enable_purchase             = isset($options['enable_purchase']) ? $options['enable_purchase'] : 'yes';
         $enable_enhanced_conversions = isset($options['enable_enhanced_conversions']) ? $options['enable_enhanced_conversions'] : 'no';
         $enable_consent_mode_v2      = isset($options['enable_consent_mode_v2']) ? $options['enable_consent_mode_v2'] : 'yes';
+        $enable_product_feed         = isset($options['enable_product_feed']) ? $options['enable_product_feed'] : 'yes';
         $debug_mode                  = isset($options['debug_mode']) ? $options['debug_mode'] : 'no';
         ?>
         <div class="wrap" style="max-width: 950px;">
@@ -378,9 +380,64 @@ class WooTrack_Settings {
                     </tr>
                 </table>
 
-                <!-- 6. DEBUG MODE -->
+                <!-- 6. NGUỒN CẤP DỮ LIỆU SẢN PHẨM (XML / CSV PRODUCT FEED) -->
+                <?php
+                $meta_xml_url   = WooTrack_Feed::get_feed_url('meta', 'xml');
+                $meta_csv_url   = WooTrack_Feed::get_feed_url('meta', 'csv');
+                $google_xml_url = WooTrack_Feed::get_feed_url('google', 'xml');
+                $google_csv_url = WooTrack_Feed::get_feed_url('google', 'csv');
+                ?>
+                <h2 style="border-bottom: 2px solid #9334e6; padding-bottom: 8px; margin-top:25px; color:#9334e6;">
+                    <span class="dashicons dashicons-rss" style="margin-right:6px;"></span>6. Nguồn Cấp Dữ Liệu Sản Phẩm (Meta Catalog & Google Merchant Feed)
+                </h2>
+                <p class="description"><?php esc_html_e('Tự động tạo link XML / CSV chuẩn mới nhất cho Meta Commerce Manager và Google Merchant Center, đồng bộ 100% mã ID sản phẩm với Pixel, CAPI & Google Ads. Tích hợp bộ đệm thông minh tự cập nhật tức thì khi sửa sản phẩm (0% tải CPU).', 'woo-track'); ?></p>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Kích hoạt Product Feed', 'woo-track'); ?></th>
+                        <td>
+                            <label>
+                                <input name="woo_track_settings[enable_product_feed]" type="checkbox" value="yes" <?php checked($enable_product_feed, 'yes'); ?> />
+                                <strong><?php esc_html_e('Bật đường dẫn XML / CSV Feed cho Meta & Google', 'woo-track'); ?></strong>
+                            </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Meta (Facebook) Catalog Feed', 'woo-track'); ?></th>
+                        <td>
+                            <div style="margin-bottom:8px;">
+                                <strong>XML (Khuyên dùng):</strong><br>
+                                <input type="text" readonly value="<?php echo esc_url($meta_xml_url); ?>" class="large-text code" onclick="this.select();" style="max-width:580px; background:#f6f7f7;" />
+                                <a href="<?php echo esc_url($meta_xml_url); ?>" target="_blank" class="button button-secondary"><?php esc_html_e('Mở XML', 'woo-track'); ?></a>
+                            </div>
+                            <div>
+                                <strong>CSV:</strong><br>
+                                <input type="text" readonly value="<?php echo esc_url($meta_csv_url); ?>" class="large-text code" onclick="this.select();" style="max-width:580px; background:#f6f7f7;" />
+                                <a href="<?php echo esc_url($meta_csv_url); ?>" target="_blank" class="button button-secondary"><?php esc_html_e('Tải CSV', 'woo-track'); ?></a>
+                            </div>
+                            <p class="description"><?php esc_html_e('Dán link này vào: Meta Commerce Manager > Danh mục (Catalog) > Nguồn dữ liệu (Data Sources) > Data Feed > Theo lịch trình (Scheduled Feed).', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Google Merchant Center Feed', 'woo-track'); ?></th>
+                        <td>
+                            <div style="margin-bottom:8px;">
+                                <strong>XML (Khuyên dùng):</strong><br>
+                                <input type="text" readonly value="<?php echo esc_url($google_xml_url); ?>" class="large-text code" onclick="this.select();" style="max-width:580px; background:#f6f7f7;" />
+                                <a href="<?php echo esc_url($google_xml_url); ?>" target="_blank" class="button button-secondary"><?php esc_html_e('Mở XML', 'woo-track'); ?></a>
+                            </div>
+                            <div>
+                                <strong>CSV:</strong><br>
+                                <input type="text" readonly value="<?php echo esc_url($google_csv_url); ?>" class="large-text code" onclick="this.select();" style="max-width:580px; background:#f6f7f7;" />
+                                <a href="<?php echo esc_url($google_csv_url); ?>" target="_blank" class="button button-secondary"><?php esc_html_e('Tải CSV', 'woo-track'); ?></a>
+                            </div>
+                            <p class="description"><?php esc_html_e('Dán link này vào: Google Merchant Center > Sản phẩm > Nguồn cấp dữ liệu (Feeds) > Tải nạp theo lịch trình (Scheduled fetch). Tự động gắn identifier_exists=no cho sản phẩm phần mềm/extension.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- 7. DEBUG MODE -->
                 <h2 style="border-bottom: 2px solid #5f6368; padding-bottom: 8px; margin-top:25px; color:#3c4043;">
-                    <span class="dashicons dashicons-admin-tools" style="margin-right:6px;"></span>6. Chế độ Kiểm thử (Debug Mode)
+                    <span class="dashicons dashicons-admin-tools" style="margin-right:6px;"></span>7. Chế độ Kiểm thử (Debug Mode)
                 </h2>
                 <table class="form-table">
                     <tr>
