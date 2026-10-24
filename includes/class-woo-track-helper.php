@@ -756,4 +756,265 @@ class WooTrack_Helper {
 
         return $data;
     }
+
+    /**
+     * Kiểm tra TikTok Pixel có được bật và có Pixel ID không
+     */
+    public static function is_tiktok_enabled() {
+        $pixel_id = trim((string) self::get_setting('tiktok_pixel_id', ''));
+        $enabled  = self::get_setting('enable_tiktok_pixel', 'yes') === 'yes';
+        return !empty($pixel_id) && $enabled;
+    }
+
+    /**
+     * Kiểm tra TikTok Events API (Server-side) có được bật không
+     */
+    public static function is_tiktok_events_api_enabled() {
+        if (!self::is_tiktok_enabled()) {
+            return false;
+        }
+        $token   = trim((string) self::get_setting('tiktok_access_token', ''));
+        $enabled = self::get_setting('enable_tiktok_events_api', 'yes') === 'yes';
+        return !empty($token) && $enabled;
+    }
+
+    /**
+     * Kiểm tra sự kiện TikTok có được bật không
+     */
+    public static function is_tiktok_event_enabled($event_name) {
+        if (!self::is_tiktok_enabled()) {
+            return false;
+        }
+        $key = 'tiktok_event_' . strtolower($event_name);
+        $val = self::get_setting($key, 'yes');
+        return ($val === 'yes' || $val === '1' || $val === true);
+    }
+
+    /**
+     * Lấy tên sự kiện mua hàng cho TikTok (Purchase hoặc CompletePayment)
+     */
+    public static function get_tiktok_purchase_event_name() {
+        $name = self::get_setting('tiktok_purchase_event_name', 'Purchase');
+        return ($name === 'CompletePayment') ? 'CompletePayment' : 'Purchase';
+    }
+
+    /**
+     * Lấy cookie _ttp của TikTok
+     */
+    public static function get_ttp() {
+        return isset($_COOKIE['_ttp']) ? sanitize_text_field(wp_unslash($_COOKIE['_ttp'])) : '';
+    }
+
+    /**
+     * Lấy mã ttclid từ cookie hoặc tham số URL
+     */
+    public static function get_ttclid() {
+        if (!empty($_COOKIE['_ttclid'])) {
+            return sanitize_text_field(wp_unslash($_COOKIE['_ttclid']));
+        }
+        if (!empty($_COOKIE['ttclid'])) {
+            return sanitize_text_field(wp_unslash($_COOKIE['ttclid']));
+        }
+        if (!empty($_GET['ttclid'])) {
+            return sanitize_text_field(wp_unslash($_GET['ttclid']));
+        }
+        return '';
+    }
+
+    /**
+     * Format dữ liệu sản phẩm đơn cho TikTok Pixel (ViewContent, AddToCart, AddToWishlist)
+     */
+    public static function format_tiktok_product_data($product, $quantity = 1) {
+        if (!$product instanceof WC_Product) {
+            return array();
+        }
+
+        $item_data   = self::format_product_item($product, $quantity, 1);
+        $cat_prod_id = $product->is_type('variation') ? $product->get_parent_id() : $product->get_id();
+        $categories  = wc_get_product_terms($cat_prod_id, 'product_cat', array('fields' => 'names'));
+        $category    = !empty($categories) && !is_wp_error($categories) ? $categories[0] : '';
+        $price       = round((float) $item_data['price'], 2);
+        $total_val   = round($price * (int) $quantity, 2);
+
+        $raw_desc = $product->get_short_description();
+        if (empty($raw_desc)) {
+            $raw_desc = $product->get_description();
+        }
+        $description = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags(strip_shortcodes((string) $raw_desc))));
+        if (function_exists('mb_substr')) {
+            $description = mb_substr($description, 0, 300, 'UTF-8');
+        } else {
+            $description = substr($description, 0, 300);
+        }
+
+        return array(
+            'content_id'       => (string) $item_data['item_id'],
+            'content_type'     => 'product',
+            'content_name'     => $product->get_name(),
+            'content_category' => $category,
+            'price'            => $price,
+            'value'            => $total_val,
+            'currency'         => get_woocommerce_currency(),
+            'quantity'         => (int) $quantity,
+            'num_items'        => (int) $quantity,
+            'description'      => $description,
+            'contents'         => array(
+                array(
+                    'content_id'   => (string) $item_data['item_id'],
+                    'content_type' => 'product',
+                    'content_name' => $product->get_name(),
+                    'price'        => $price,
+                    'quantity'     => (int) $quantity,
+                ),
+            ),
+        );
+    }
+
+    /**
+     * Format dữ liệu đơn hàng cho TikTok Pixel & Events API (Purchase, CompletePayment, InitiateCheckout, PlaceAnOrder)
+     */
+    public static function format_tiktok_order_data($order) {
+        if (!$order instanceof WC_Order) {
+            return array();
+        }
+
+        $order_data  = self::format_order_data($order);
+        $contents    = array();
+        $content_ids = array();
+        $names       = array();
+
+        foreach ($order_data['items'] as $item) {
+            $content_ids[] = (string) $item['item_id'];
+            $names[]       = (string) $item['item_name'];
+            $contents[]    = array(
+                'content_id'   => (string) $item['item_id'],
+                'content_type' => 'product',
+                'content_name' => (string) $item['item_name'],
+                'price'        => (float) $item['price'],
+                'quantity'     => (int) $item['quantity'],
+            );
+        }
+        $content_ids = array_values(array_unique($content_ids));
+
+        return array(
+            'content_id'   => !empty($content_ids) ? $content_ids[0] : '',
+            'content_type' => 'product',
+            'content_name' => !empty($names) ? implode(', ', $names) : '',
+            'contents'     => $contents,
+            'value'        => (float) $order_data['value'],
+            'currency'     => $order_data['currency'],
+            'num_items'    => (int) $order->get_item_count(),
+            'order_id'     => (string) $order->get_order_number(),
+        );
+    }
+
+    /**
+     * Format dữ liệu user matching cho TikTok Events API (Server-side)
+     * Yêu cầu email, phone_number, external_id băm SHA-256
+     */
+    public static function format_tiktok_user_data_for_api($order) {
+        if (!$order instanceof WC_Order) {
+            return array();
+        }
+
+        $user = array();
+
+        // Email
+        $email = self::strtolower_utf8($order->get_billing_email());
+        if (!empty($email) && is_email($email)) {
+            $user['email'] = hash('sha256', $email);
+        }
+
+        // Phone: Chuẩn E.164 (có dấu +) băm SHA-256
+        $country    = trim(strtoupper((string) $order->get_billing_country())) ?: 'VN';
+        $raw_phone  = (string) $order->get_billing_phone();
+        $e164_phone = self::normalize_phone($raw_phone, $country, true);
+        if (!empty($e164_phone)) {
+            $hashed_phone = hash('sha256', $e164_phone);
+            $user['phone']        = $hashed_phone;
+            $user['phone_number'] = $hashed_phone;
+        }
+
+        // External ID
+        $customer_id = $order->get_customer_id();
+        if ($customer_id > 0) {
+            $user['external_id'] = hash('sha256', (string) $customer_id);
+        }
+
+        $is_customer_request = !is_admin() && !wp_doing_cron() && (!defined('REST_REQUEST') || !REST_REQUEST);
+
+        // IP & User Agent
+        $saved_ip = (string) $order->get_meta('_woo_track_tiktok_ip');
+        if (empty($saved_ip)) {
+            $saved_ip = (string) $order->get_meta('_woo_track_meta_ip');
+        }
+        if (empty($saved_ip)) {
+            $saved_ip = (string) $order->get_customer_ip_address();
+        }
+        $ip = !empty($saved_ip) ? $saved_ip : ($is_customer_request ? self::get_client_ip() : '');
+        if (!empty($ip)) {
+            $user['ip'] = $ip;
+        }
+
+        $saved_ua = (string) $order->get_meta('_woo_track_tiktok_ua');
+        if (empty($saved_ua)) {
+            $saved_ua = (string) $order->get_meta('_woo_track_meta_ua');
+        }
+        if (empty($saved_ua)) {
+            $saved_ua = (string) $order->get_customer_user_agent();
+        }
+        $ua = !empty($saved_ua) ? $saved_ua : ($is_customer_request ? self::get_client_user_agent() : '');
+        if (!empty($ua)) {
+            $user['user_agent'] = $ua;
+        }
+
+        // Cookie ttp & ttclid
+        $saved_ttp = (string) $order->get_meta('_woo_track_tiktok_ttp');
+        $ttp = !empty($saved_ttp) ? $saved_ttp : ($is_customer_request ? self::get_ttp() : '');
+        if (!empty($ttp)) {
+            $user['ttp'] = $ttp;
+        }
+
+        $saved_ttclid = (string) $order->get_meta('_woo_track_tiktok_ttclid');
+        $ttclid = !empty($saved_ttclid) ? $saved_ttclid : ($is_customer_request ? self::get_ttclid() : '');
+        if (!empty($ttclid)) {
+            $user['ttclid'] = $ttclid;
+        }
+
+        return $user;
+    }
+
+    /**
+     * Format dữ liệu Advanced Matching cho TikTok Pixel trên trình duyệt (ttq.identify({...}))
+     */
+    public static function format_tiktok_advanced_matching_browser($order_or_user = null) {
+        $data = array();
+
+        if ($order_or_user instanceof WC_Order) {
+            $email = self::strtolower_utf8($order_or_user->get_billing_email());
+            $country = trim(strtoupper((string) $order_or_user->get_billing_country())) ?: 'VN';
+            $e164_phone = self::normalize_phone($order_or_user->get_billing_phone(), $country, true);
+
+            if (!empty($email) && is_email($email)) {
+                $data['email'] = hash('sha256', $email);
+            }
+            if (!empty($e164_phone)) {
+                $data['phone_number'] = hash('sha256', $e164_phone);
+            }
+            $customer_id = $order_or_user->get_customer_id();
+            if ($customer_id > 0) {
+                $data['external_id'] = hash('sha256', (string) $customer_id);
+            }
+        } elseif (is_user_logged_in()) {
+            $current_user = wp_get_current_user();
+            if ($current_user && $current_user->ID) {
+                if (!empty($current_user->user_email)) {
+                    $data['email'] = hash('sha256', self::strtolower_utf8($current_user->user_email));
+                }
+                $data['external_id'] = hash('sha256', (string) $current_user->ID);
+            }
+        }
+
+        return $data;
+    }
 }

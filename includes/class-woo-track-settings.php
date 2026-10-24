@@ -74,6 +74,12 @@ class WooTrack_Settings {
         $sanitized['meta_test_event_code'] = isset($input['meta_test_event_code']) ? sanitize_text_field(trim($input['meta_test_event_code'])) : '';
         $sanitized['meta_content_type']    = isset($input['meta_content_type']) && in_array($input['meta_content_type'], array('product', 'product_group')) ? $input['meta_content_type'] : 'product';
 
+        // TikTok Ads (Pixel & Events API)
+        $sanitized['tiktok_pixel_id']            = isset($input['tiktok_pixel_id']) ? sanitize_text_field(trim($input['tiktok_pixel_id'])) : '';
+        $sanitized['tiktok_access_token']        = isset($input['tiktok_access_token']) ? sanitize_textarea_field(trim($input['tiktok_access_token'])) : '';
+        $sanitized['tiktok_test_event_code']     = isset($input['tiktok_test_event_code']) ? sanitize_text_field(trim($input['tiktok_test_event_code'])) : '';
+        $sanitized['tiktok_purchase_event_name'] = isset($input['tiktok_purchase_event_name']) && in_array($input['tiktok_purchase_event_name'], array('Purchase', 'CompletePayment'), true) ? $input['tiktok_purchase_event_name'] : 'Purchase';
+
         // Định danh sản phẩm
         $sanitized['product_identifier']   = isset($input['product_identifier']) && in_array($input['product_identifier'], array('parent_id', 'id', 'sku'), true) ? $input['product_identifier'] : 'parent_id';
 
@@ -94,6 +100,17 @@ class WooTrack_Settings {
             'meta_event_initiate_checkout',
             'meta_event_purchase',
             'meta_event_search',
+            'enable_tiktok_pixel',
+            'enable_tiktok_events_api',
+            'enable_tiktok_advanced_matching',
+            'tiktok_event_view_content',
+            'tiktok_event_add_to_cart',
+            'tiktok_event_initiate_checkout',
+            'tiktok_event_add_payment_info',
+            'tiktok_event_place_an_order',
+            'tiktok_event_purchase',
+            'tiktok_event_search',
+            'tiktok_event_add_to_wishlist',
             'enable_product_feed',
             'debug_mode'
         );
@@ -139,6 +156,24 @@ class WooTrack_Settings {
         $meta_event_initiate_checkout  = isset($options['meta_event_initiate_checkout']) ? $options['meta_event_initiate_checkout'] : 'yes';
         $meta_event_purchase           = isset($options['meta_event_purchase']) ? $options['meta_event_purchase'] : 'yes';
         $meta_event_search             = isset($options['meta_event_search']) ? $options['meta_event_search'] : 'yes';
+
+        // TikTok Ads Settings
+        $tiktok_pixel_id                 = isset($options['tiktok_pixel_id']) ? $options['tiktok_pixel_id'] : '';
+        $tiktok_access_token             = isset($options['tiktok_access_token']) ? $options['tiktok_access_token'] : '';
+        $tiktok_test_event_code          = isset($options['tiktok_test_event_code']) ? $options['tiktok_test_event_code'] : '';
+        $tiktok_purchase_event_name      = isset($options['tiktok_purchase_event_name']) ? $options['tiktok_purchase_event_name'] : 'Purchase';
+        $enable_tiktok_pixel             = isset($options['enable_tiktok_pixel']) ? $options['enable_tiktok_pixel'] : 'yes';
+        $enable_tiktok_events_api        = isset($options['enable_tiktok_events_api']) ? $options['enable_tiktok_events_api'] : 'yes';
+        $enable_tiktok_advanced_matching = isset($options['enable_tiktok_advanced_matching']) ? $options['enable_tiktok_advanced_matching'] : 'yes';
+
+        $tiktok_event_view_content       = isset($options['tiktok_event_view_content']) ? $options['tiktok_event_view_content'] : 'yes';
+        $tiktok_event_add_to_cart        = isset($options['tiktok_event_add_to_cart']) ? $options['tiktok_event_add_to_cart'] : 'yes';
+        $tiktok_event_initiate_checkout  = isset($options['tiktok_event_initiate_checkout']) ? $options['tiktok_event_initiate_checkout'] : 'yes';
+        $tiktok_event_add_payment_info   = isset($options['tiktok_event_add_payment_info']) ? $options['tiktok_event_add_payment_info'] : 'yes';
+        $tiktok_event_place_an_order     = isset($options['tiktok_event_place_an_order']) ? $options['tiktok_event_place_an_order'] : 'yes';
+        $tiktok_event_purchase           = isset($options['tiktok_event_purchase']) ? $options['tiktok_event_purchase'] : 'yes';
+        $tiktok_event_search             = isset($options['tiktok_event_search']) ? $options['tiktok_event_search'] : 'yes';
+        $tiktok_event_add_to_wishlist    = isset($options['tiktok_event_add_to_wishlist']) ? $options['tiktok_event_add_to_wishlist'] : 'yes';
 
         $enable_view_item_list       = isset($options['enable_view_item_list']) ? $options['enable_view_item_list'] : 'yes';
         $enable_view_item            = isset($options['enable_view_item']) ? $options['enable_view_item'] : 'yes';
@@ -335,9 +370,112 @@ class WooTrack_Settings {
                     </tr>
                 </table>
 
-                <!-- 5. SẢN PHẨM & SỰ KIỆN CHUNG -->
+                <!-- 5. TIKTOK ADS (PIXEL & EVENTS API) -->
+                <h2 style="border-bottom: 2px solid #000; padding-bottom: 8px; margin-top:25px; color:#111;">
+                    <span class="dashicons dashicons-video-alt3" style="margin-right:6px; color:#fe2c55;"></span>5. TikTok Ads (Pixel & Events API)
+                </h2>
+                <p class="description"><?php esc_html_e('Theo dõi chuyển đổi kép (Browser TikTok Pixel + Server-to-Server Events API v1.3/v2) chuẩn TikTok với cơ chế tự động khử trùng lặp (Deduplication) qua event_id.', 'woo-track'); ?></p>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="tiktok_pixel_id"><?php esc_html_e('TikTok Pixel ID', 'woo-track'); ?></label></th>
+                        <td>
+                            <input name="woo_track_settings[tiktok_pixel_id]" type="text" id="tiktok_pixel_id" value="<?php echo esc_attr($tiktok_pixel_id); ?>" class="regular-text" placeholder="C8XXXXXXXXXXXXXX" />
+                            <p class="description"><?php esc_html_e('Mã TikTok Pixel ID (Lấy tại: TikTok Ads Manager > Tools > Events > Web Events).', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Kích hoạt TikTok Pixel', 'woo-track'); ?></th>
+                        <td>
+                            <label>
+                                <input name="woo_track_settings[enable_tiktok_pixel]" type="checkbox" value="yes" <?php checked($enable_tiktok_pixel, 'yes'); ?> />
+                                <strong><?php esc_html_e('Bật theo dõi TikTok Pixel phía Trình duyệt (Browser)', 'woo-track'); ?></strong>
+                            </label>
+                            <p class="description"><?php esc_html_e('Tự động chèn Base Code chuẩn và bắn các sự kiện chuẩn (ViewContent, AddToCart, InitiateCheckout, PlaceAnOrder, Purchase...).', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('TikTok Events API (Server-side)', 'woo-track'); ?></th>
+                        <td>
+                            <label style="display:block; margin-bottom:10px;">
+                                <input name="woo_track_settings[enable_tiktok_events_api]" type="checkbox" value="yes" <?php checked($enable_tiktok_events_api, 'yes'); ?> />
+                                <strong><?php esc_html_e('Bật TikTok Events API (Server-to-Server)', 'woo-track'); ?></strong>
+                            </label>
+                            <label for="tiktok_access_token"><strong><?php esc_html_e('TikTok Access Token:', 'woo-track'); ?></strong></label><br>
+                            <textarea name="woo_track_settings[tiktok_access_token]" id="tiktok_access_token" rows="3" class="large-text" placeholder="Chuỗi Access Token (Lấy tại: Events Manager > Pixel Settings > Events API > Generate Access Token)"><?php echo esc_textarea($tiktok_access_token); ?></textarea>
+                            <p class="description"><?php esc_html_e('Mã truy cập tạo từ Trình quản lý sự kiện của TikTok để cho phép máy chủ gửi sự kiện chuyển đổi trực tiếp.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="tiktok_test_event_code"><?php esc_html_e('Test Event Code (Kiểm thử Events API)', 'woo-track'); ?></label></th>
+                        <td>
+                            <input name="woo_track_settings[tiktok_test_event_code]" type="text" id="tiktok_test_event_code" value="<?php echo esc_attr($tiktok_test_event_code); ?>" class="regular-text" placeholder="TEST12345 (Tuỳ chọn)" />
+                            <p class="description"><?php esc_html_e('Nhập mã kiểm thử sự kiện trong tab "Test Events" của TikTok Events Manager để xem dữ liệu gửi từ máy chủ realtime. Xóa đi khi chạy thực tế.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Advanced Matching', 'woo-track'); ?></th>
+                        <td>
+                            <label>
+                                <input name="woo_track_settings[enable_tiktok_advanced_matching]" type="checkbox" value="yes" <?php checked($enable_tiktok_advanced_matching, 'yes'); ?> />
+                                <strong><?php esc_html_e('Bật Khớp nâng cao TikTok (Advanced Matching)', 'woo-track'); ?></strong>
+                            </label>
+                            <p class="description"><?php esc_html_e('Tự động băm SHA-256 Email và Số điện thoại (chuẩn E.164) gửi kèm qua ttq.identify() và Events API để tối đa hóa tỷ lệ ghi nhận đơn hàng.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="tiktok_purchase_event_name"><?php esc_html_e('Tên sự kiện Mua hàng', 'woo-track'); ?></label></th>
+                        <td>
+                            <select name="woo_track_settings[tiktok_purchase_event_name]" id="tiktok_purchase_event_name">
+                                <option value="Purchase" <?php selected($tiktok_purchase_event_name, 'Purchase'); ?>><?php esc_html_e('Purchase (Chuẩn mới nhất của TikTok - Khuyên dùng)', 'woo-track'); ?></option>
+                                <option value="CompletePayment" <?php selected($tiktok_purchase_event_name, 'CompletePayment'); ?>><?php esc_html_e('CompletePayment (Chuẩn cũ của TikTok)', 'woo-track'); ?></option>
+                            </select>
+                            <p class="description"><?php esc_html_e('Chọn tên sự kiện bạn đã cấu hình trong Trình quản lý sự kiện TikTok để đảm bảo khớp 100% khi khử trùng lặp.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Các sự kiện TikTok theo dõi', 'woo-track'); ?></th>
+                        <td>
+                            <fieldset>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[tiktok_event_view_content]" type="checkbox" value="yes" <?php checked($tiktok_event_view_content, 'yes'); ?> />
+                                    <strong>ViewContent:</strong> <?php esc_html_e('Xem chi tiết sản phẩm / extension', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[tiktok_event_add_to_cart]" type="checkbox" value="yes" <?php checked($tiktok_event_add_to_cart, 'yes'); ?> />
+                                    <strong>AddToCart:</strong> <?php esc_html_e('Thêm vào giỏ hàng (Form chi tiết và AJAX)', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[tiktok_event_initiate_checkout]" type="checkbox" value="yes" <?php checked($tiktok_event_initiate_checkout, 'yes'); ?> />
+                                    <strong>InitiateCheckout:</strong> <?php esc_html_e('Khách vào trang thanh toán', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[tiktok_event_add_payment_info]" type="checkbox" value="yes" <?php checked($tiktok_event_add_payment_info, 'yes'); ?> />
+                                    <strong>AddPaymentInfo:</strong> <?php esc_html_e('Khách chọn phương thức thanh toán', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[tiktok_event_place_an_order]" type="checkbox" value="yes" <?php checked($tiktok_event_place_an_order, 'yes'); ?> />
+                                    <strong>PlaceAnOrder:</strong> <?php esc_html_e('Khách bấm nút Đặt hàng trên Checkout', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[tiktok_event_purchase]" type="checkbox" value="yes" <?php checked($tiktok_event_purchase, 'yes'); ?> />
+                                    <strong>Purchase / CompletePayment:</strong> <?php esc_html_e('Mua hàng thành công (Kèm Events API & Deduplication)', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[tiktok_event_search]" type="checkbox" value="yes" <?php checked($tiktok_event_search, 'yes'); ?> />
+                                    <strong>Search:</strong> <?php esc_html_e('Tìm kiếm sản phẩm trên website', 'woo-track'); ?>
+                                </label>
+                                <label style="display:block; margin-bottom:8px;">
+                                    <input name="woo_track_settings[tiktok_event_add_to_wishlist]" type="checkbox" value="yes" <?php checked($tiktok_event_add_to_wishlist, 'yes'); ?> />
+                                    <strong>AddToWishlist:</strong> <?php esc_html_e('Thêm vào danh sách mong muốn', 'woo-track'); ?>
+                                </label>
+                            </fieldset>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- 6. SẢN PHẨM & SỰ KIỆN CHUNG -->
                 <h2 style="border-bottom: 2px solid #5f6368; padding-bottom: 8px; margin-top:25px; color:#3c4043;">
-                    <span class="dashicons dashicons-cart" style="margin-right:6px;"></span>5. Cấu hình Định danh Sản phẩm
+                    <span class="dashicons dashicons-cart" style="margin-right:6px;"></span>6. Cấu hình Định danh Sản phẩm
                 </h2>
                 <table class="form-table">
                     <tr>
@@ -380,24 +518,26 @@ class WooTrack_Settings {
                     </tr>
                 </table>
 
-                <!-- 6. NGUỒN CẤP DỮ LIỆU SẢN PHẨM (XML / CSV PRODUCT FEED) -->
+                <!-- 7. NGUỒN CẤP DỮ LIỆU SẢN PHẨM (XML / CSV PRODUCT FEED) -->
                 <?php
                 $meta_xml_url   = WooTrack_Feed::get_feed_url('meta', 'xml');
                 $meta_csv_url   = WooTrack_Feed::get_feed_url('meta', 'csv');
                 $google_xml_url = WooTrack_Feed::get_feed_url('google', 'xml');
                 $google_csv_url = WooTrack_Feed::get_feed_url('google', 'csv');
+                $tiktok_xml_url = WooTrack_Feed::get_feed_url('tiktok', 'xml');
+                $tiktok_csv_url = WooTrack_Feed::get_feed_url('tiktok', 'csv');
                 ?>
                 <h2 style="border-bottom: 2px solid #9334e6; padding-bottom: 8px; margin-top:25px; color:#9334e6;">
-                    <span class="dashicons dashicons-rss" style="margin-right:6px;"></span>6. Nguồn Cấp Dữ Liệu Sản Phẩm (Meta Catalog & Google Merchant Feed)
+                    <span class="dashicons dashicons-rss" style="margin-right:6px;"></span>7. Nguồn Cấp Dữ Liệu Sản Phẩm (Meta, Google & TikTok Catalog Feed)
                 </h2>
-                <p class="description"><?php esc_html_e('Tự động tạo link XML / CSV chuẩn mới nhất cho Meta Commerce Manager và Google Merchant Center, đồng bộ 100% mã ID sản phẩm với Pixel, CAPI & Google Ads. Tích hợp bộ đệm thông minh tự cập nhật tức thì khi sửa sản phẩm (0% tải CPU).', 'woo-track'); ?></p>
+                <p class="description"><?php esc_html_e('Tự động tạo link XML / CSV chuẩn mới nhất cho Meta Commerce Manager, Google Merchant Center và TikTok Catalog Manager, đồng bộ 100% mã ID sản phẩm với Pixel, CAPI, TikTok Events API & Google Ads. Tích hợp bộ đệm thông minh tự cập nhật tức thì khi sửa sản phẩm (0% tải CPU).', 'woo-track'); ?></p>
                 <table class="form-table">
                     <tr>
                         <th scope="row"><?php esc_html_e('Kích hoạt Product Feed', 'woo-track'); ?></th>
                         <td>
                             <label>
                                 <input name="woo_track_settings[enable_product_feed]" type="checkbox" value="yes" <?php checked($enable_product_feed, 'yes'); ?> />
-                                <strong><?php esc_html_e('Bật đường dẫn XML / CSV Feed cho Meta & Google', 'woo-track'); ?></strong>
+                                <strong><?php esc_html_e('Bật đường dẫn XML / CSV Feed cho Meta, Google & TikTok', 'woo-track'); ?></strong>
                             </label>
                         </td>
                     </tr>
@@ -430,14 +570,30 @@ class WooTrack_Settings {
                                 <input type="text" readonly value="<?php echo esc_url($google_csv_url); ?>" class="large-text code" onclick="this.select();" style="max-width:580px; background:#f6f7f7;" />
                                 <a href="<?php echo esc_url($google_csv_url); ?>" target="_blank" class="button button-secondary"><?php esc_html_e('Tải CSV', 'woo-track'); ?></a>
                             </div>
-                            <p class="description"><?php esc_html_e('Dán link này vào: Google Merchant Center > Sản phẩm > Nguồn cấp dữ liệu (Feeds) > Tải nạp theo lịch trình (Scheduled fetch). Tự động gắn identifier_exists=no cho sản phẩm phần mềm/extension.', 'woo-track'); ?></p>
+                            <p class="description"><?php esc_html_e('Dán link này vào Google Merchant Center > Nguồn cấp dữ liệu (Feeds) > Nguồn cấp dữ liệu chính > Lịch biểu nạp nạp tự động.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('TikTok Catalog Data Feed', 'woo-track'); ?></th>
+                        <td>
+                            <div style="margin-bottom:8px;">
+                                <strong>XML (Khuyên dùng):</strong><br>
+                                <input type="text" readonly value="<?php echo esc_url($tiktok_xml_url); ?>" class="large-text code" onclick="this.select();" style="max-width:580px; background:#f6f7f7;" />
+                                <a href="<?php echo esc_url($tiktok_xml_url); ?>" target="_blank" class="button button-secondary"><?php esc_html_e('Mở XML', 'woo-track'); ?></a>
+                            </div>
+                            <div>
+                                <strong>CSV:</strong><br>
+                                <input type="text" readonly value="<?php echo esc_url($tiktok_csv_url); ?>" class="large-text code" onclick="this.select();" style="max-width:580px; background:#f6f7f7;" />
+                                <a href="<?php echo esc_url($tiktok_csv_url); ?>" target="_blank" class="button button-secondary"><?php esc_html_e('Tải CSV', 'woo-track'); ?></a>
+                            </div>
+                            <p class="description"><?php esc_html_e('Dán link này vào TikTok Ads Manager > Assets > Catalogs > Data Sources > Scheduled Feed (Tự động nạp theo lịch định kỳ).', 'woo-track'); ?></p>
                         </td>
                     </tr>
                 </table>
 
-                <!-- 7. DEBUG MODE -->
+                <!-- 8. DEBUG MODE -->
                 <h2 style="border-bottom: 2px solid #5f6368; padding-bottom: 8px; margin-top:25px; color:#3c4043;">
-                    <span class="dashicons dashicons-admin-tools" style="margin-right:6px;"></span>7. Chế độ Kiểm thử (Debug Mode)
+                    <span class="dashicons dashicons-admin-tools" style="margin-right:6px;"></span>8. Chế độ Kiểm thử (Debug Mode)
                 </h2>
                 <table class="form-table">
                     <tr>
@@ -445,7 +601,7 @@ class WooTrack_Settings {
                         <td>
                             <label>
                                 <input name="woo_track_settings[debug_mode]" type="checkbox" value="yes" <?php checked($debug_mode, 'yes'); ?> />
-                                <?php esc_html_e('Bật Debug Console (In toàn bộ sự kiện Google & Meta ra F12 Developer Tools và ghi log CAPI)', 'woo-track'); ?>
+                                <?php esc_html_e('Bật Debug Console (In toàn bộ sự kiện Google, Meta & TikTok ra F12 Developer Tools và ghi log Server Events)', 'woo-track'); ?>
                             </label>
                         </td>
                     </tr>

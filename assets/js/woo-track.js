@@ -22,9 +22,11 @@
         return window.wooTrackPayload || {
             events: [],
             meta_events: [],
+            tiktok_events: [],
             user_data: null,
             single_product: null,
-            meta_single_product: null
+            meta_single_product: null,
+            tiktok_single_product: null
         };
     }
 
@@ -49,6 +51,20 @@
             console.log(
                 '%c[WooTrack Meta 🎯] ' + eventName,
                 'background: #0866ff; color: #fff; font-weight: bold; padding: 2px 6px; border-radius: 3px;',
+                eventData,
+                eventParams ? eventParams : ''
+            );
+        }
+    }
+
+    /**
+     * Hàm in log TikTok hỗ trợ kiểm tra khi bật Debug Mode
+     */
+    function debugTikTokLog(eventName, eventData, eventParams) {
+        if (config.debug_mode) {
+            console.log(
+                '%c[WooTrack TikTok 🎵] ' + eventName,
+                'background: #000000; color: #00f2fe; border: 1px solid #fe2c55; font-weight: bold; padding: 2px 6px; border-radius: 3px;',
                 eventData,
                 eventParams ? eventParams : ''
             );
@@ -116,6 +132,24 @@
     }
 
     /**
+     * Hàm bắn sự kiện an toàn cho TikTok Pixel (ttq)
+     * Hỗ trợ event_id trong options để TikTok tự động khử trùng lặp với Events API
+     */
+    function sendTikTokPixelEvent(eventName, eventData, options) {
+        if (typeof window.ttq === 'undefined' || typeof window.ttq.track !== 'function' || !config.enable_tiktok_pixel || !config.tiktok_pixel_id) {
+            return;
+        }
+
+        if (options && typeof options === 'object') {
+            window.ttq.track(eventName, eventData, options);
+        } else {
+            window.ttq.track(eventName, eventData);
+        }
+
+        debugTikTokLog(eventName, eventData, options);
+    }
+
+    /**
      * Khởi tạo cấu hình ban đầu
      */
     function initTrackerConfig() {
@@ -173,6 +207,26 @@
                 }
                 var eventParams = item.event_id ? { eventID: item.event_id } : undefined;
                 sendMetaPixelEvent(item.event, item.data, eventParams);
+            });
+        }
+
+        // 3. Bắn các sự kiện TikTok chuẩn bị sẵn từ Server (ViewContent, InitiateCheckout, Purchase, CompletePayment, Search, AddToCart)
+        if (payload.tiktok_events && payload.tiktok_events.length > 0) {
+            $.each(payload.tiktok_events, function (index, item) {
+                if (item.event === 'AddToCart') {
+                    var ttId = null;
+                    if (item.data && item.data.contents && item.data.contents[0]) {
+                        ttId = item.data.contents[0].content_id;
+                    } else if (item.data && item.data.content_id) {
+                        ttId = item.data.content_id;
+                    }
+                    if (ttId && isDuplicateAddToCart('tt_' + ttId, true)) {
+                        debugTikTokLog('Suppressed duplicate AddToCart from page redirect', item.data);
+                        return;
+                    }
+                }
+                var options = item.event_id ? { event_id: item.event_id } : undefined;
+                sendTikTokPixelEvent(item.event, item.data, options);
             });
         }
     }
@@ -247,13 +301,14 @@
     }
 
     /**
-     * Lắng nghe sự kiện thêm vào giỏ hàng (Add to Cart) cho cả Google và Meta
+     * Lắng nghe sự kiện thêm vào giỏ hàng (Add to Cart) cho Google, Meta và TikTok
      */
     function setupAddToCartListeners() {
         // 1. AJAX Add to cart (Hỗ trợ cả fragments từ server và nút bấm loop)
         $(document.body).on('added_to_cart', function (event, fragments, cart_hash, $button) {
             var googleHandled = false;
             var metaHandled   = false;
+            var tiktokHandled = false;
 
             // Nếu có dữ liệu Google từ server gửi qua fragments
             if (fragments && fragments.woo_track_add_to_cart) {
@@ -282,8 +337,20 @@
                 metaHandled = true;
             }
 
+            // Nếu có dữ liệu TikTok từ server gửi qua fragments
+            if (fragments && fragments.woo_track_tiktok_add_to_cart) {
+                if (config.enable_tiktok_pixel && config.tiktok_events && config.tiktok_events.add_to_cart) {
+                    var ttPayload = fragments.woo_track_tiktok_add_to_cart;
+                    var ttItemId = (ttPayload.data && ttPayload.data.contents && ttPayload.data.contents[0]) ? ttPayload.data.contents[0].content_id : null;
+                    if (!isDuplicateAddToCart('tt_' + ttItemId)) {
+                        sendTikTokPixelEvent('AddToCart', ttPayload.data);
+                    }
+                }
+                tiktokHandled = true;
+            }
+
             // Fallback lấy dữ liệu từ nút bấm nếu fragments không chứa đủ
-            if ((!googleHandled || !metaHandled) && $button && $button.length) {
+            if ((!googleHandled || !metaHandled || !tiktokHandled) && $button && $button.length) {
                 // Google Item
                 if (!googleHandled && isGoogleAddToCartEnabled()) {
                     var item = null;
@@ -331,6 +398,26 @@
                         }
                     }
                 }
+
+                // TikTok Item
+                if (!tiktokHandled && config.enable_tiktok_pixel && config.tiktok_events && config.tiktok_events.add_to_cart) {
+                    var tiktokItem = null;
+                    var tiktokDataAttr = $button.attr('data-woo-track-tiktok-item');
+                    if (tiktokDataAttr) {
+                        try {
+                            tiktokItem = JSON.parse(tiktokDataAttr);
+                        } catch (e) {
+                            tiktokItem = null;
+                        }
+                    }
+
+                    if (tiktokItem) {
+                        var ttBtnId = (tiktokItem.contents && tiktokItem.contents[0]) ? tiktokItem.contents[0].content_id : (tiktokItem.content_id ? tiktokItem.content_id : null);
+                        if (!isDuplicateAddToCart('tt_' + ttBtnId)) {
+                            sendTikTokPixelEvent('AddToCart', tiktokItem);
+                        }
+                    }
+                }
             }
         });
 
@@ -359,6 +446,7 @@
             var payload = getPayload();
             var baseItem = payload.single_product;
             var metaBaseItem = payload.meta_single_product;
+            var tiktokBaseItem = payload.tiktok_single_product;
 
             var qty = 1;
             if ($form.length && $form.find('input[name="quantity"]').length) {
@@ -471,6 +559,55 @@
                     }
                 }
             }
+
+            // Xử lý TikTok AddToCart
+            if (config.enable_tiktok_pixel && config.tiktok_events && config.tiktok_events.add_to_cart) {
+                if (tiktokBaseItem) {
+                    var ttItem = $.extend(true, {}, tiktokBaseItem);
+                    var ttPrice = 0;
+                    if (ttItem.contents && ttItem.contents.length > 0) {
+                        if (selectedVariation && typeof selectedVariation.display_price !== 'undefined') {
+                            ttItem.contents[0].price = parseFloat(selectedVariation.display_price) || ttItem.contents[0].price;
+                        }
+                        ttPrice = ttItem.contents[0].price || 0;
+                        ttItem.contents[0].quantity = qty;
+                        if (hasVariation && resolvedVarId) {
+                            ttItem.contents[0].content_id = resolvedVarId;
+                            ttItem.content_id = resolvedVarId;
+                        }
+                    }
+                    ttItem.price = ttPrice;
+                    ttItem.value = parseFloat((ttPrice * qty).toFixed(2));
+                    ttItem.quantity = qty;
+                    ttItem.num_items = qty;
+                    var ttClickId = (ttItem.contents && ttItem.contents[0]) ? ttItem.contents[0].content_id : null;
+                    if (!isDuplicateAddToCart('tt_' + ttClickId)) {
+                        sendTikTokPixelEvent('AddToCart', ttItem);
+                    }
+                } else if (item) {
+                    var fbPrice = parseFloat(item.price) || 0;
+                    var fbTotal = parseFloat((fbPrice * qty).toFixed(2));
+                    if (!isDuplicateAddToCart('tt_' + item.item_id)) {
+                        sendTikTokPixelEvent('AddToCart', {
+                            content_type: 'product',
+                            content_id: item.item_id,
+                            content_name: item.item_name || 'Product',
+                            price: fbPrice,
+                            value: fbTotal,
+                            quantity: qty,
+                            num_items: qty,
+                            currency: config.currency || 'VND',
+                            contents: [{
+                                content_id: item.item_id,
+                                content_type: 'product',
+                                content_name: item.item_name || 'Product',
+                                price: fbPrice,
+                                quantity: qty
+                            }]
+                        });
+                    }
+                }
+            }
         });
     }
 
@@ -504,6 +641,59 @@
     }
 
     /**
+     * Lắng nghe các sự kiện thanh toán và wishlist bổ sung cho TikTok (AddPaymentInfo, PlaceAnOrder, AddToWishlist)
+     */
+    function setupTikTokAdditionalListeners() {
+        if (!config.enable_tiktok_pixel || !config.tiktok_events) {
+            return;
+        }
+
+        var hasFiredPaymentInfo = false;
+        var hasFiredPlaceOrder   = false;
+
+        // AddPaymentInfo khi khách chọn phương thức thanh toán trên Checkout
+        if (config.tiktok_events.add_payment_info) {
+            $(document).on('change', 'input[name="payment_method"]', function () {
+                if (hasFiredPaymentInfo) return;
+                hasFiredPaymentInfo = true;
+                sendTikTokPixelEvent('AddPaymentInfo', {
+                    content_type: 'product',
+                    currency: config.currency || 'VND'
+                });
+            });
+        }
+
+        // PlaceAnOrder khi khách bấm nút Đặt hàng trên Checkout
+        if (config.tiktok_events.place_an_order) {
+            $(document).on('click', '#place_order, button#place_order, form.checkout button[type="submit"]', function () {
+                if (hasFiredPlaceOrder) return;
+                var $form = $(this).closest('form.checkout');
+                if ($form.length && typeof $form[0].checkValidity === 'function' && !$form[0].checkValidity()) {
+                    return;
+                }
+                hasFiredPlaceOrder = true;
+                sendTikTokPixelEvent('PlaceAnOrder', {
+                    content_type: 'product',
+                    currency: config.currency || 'VND'
+                });
+            });
+        }
+
+        // AddToWishlist khi khách thêm vào danh sách mong muốn
+        if (config.tiktok_events.add_to_wishlist) {
+            $(document).on('click', '.add_to_wishlist, .yith-wcwl-add-button a, .tinvwl_add_to_wishlist_button', function () {
+                var $btn = $(this);
+                var prodId = $btn.data('product_id') || $btn.attr('data-product-id');
+                sendTikTokPixelEvent('AddToWishlist', {
+                    content_type: 'product',
+                    content_id: prodId ? String(prodId) : '',
+                    currency: config.currency || 'VND'
+                });
+            });
+        }
+    }
+
+    /**
      * Đọc giá trị cookie theo tên
      */
     function getCookieValue(name) {
@@ -512,13 +702,15 @@
     }
 
     /**
-     * Tự động bắt fbclid lưu vào cookie _fbc trên trình duyệt (vượt qua HTML Page Cache)
-     * và đính kèm _fbp / _fbc vào form Checkout để đảm bảo CAPI luôn nhận đủ thông tin
+     * Tự động bắt fbclid & ttclid lưu vào cookie trên trình duyệt (vượt qua HTML Page Cache)
+     * và đính kèm fbp, fbc, ttp, ttclid vào form Checkout để đảm bảo CAPI & Events API luôn nhận đủ thông tin
      */
-    function syncMetaCookiesAndCheckoutFields() {
+    function syncTrackingCookiesAndCheckoutFields() {
         try {
             if (window.location && window.location.search) {
                 var urlParams = new URLSearchParams(window.location.search);
+
+                // Meta fbclid
                 var fbclid = urlParams.get('fbclid');
                 if (fbclid) {
                     var currentFbc = getCookieValue('_fbc');
@@ -530,6 +722,15 @@
                         document.cookie = '_fbc=' + encodeURIComponent(newFbc) + '; expires=' + expires + '; path=/; SameSite=Lax' + secure;
                     }
                 }
+
+                // TikTok ttclid
+                var ttclid = urlParams.get('ttclid');
+                if (ttclid) {
+                    var ttExpires = new Date(Date.now() + 90 * 86400 * 1000).toUTCString();
+                    var ttSecure = window.location.protocol === 'https:' ? '; Secure' : '';
+                    document.cookie = '_ttclid=' + encodeURIComponent(ttclid) + '; expires=' + ttExpires + '; path=/; SameSite=Lax' + ttSecure;
+                    document.cookie = 'ttclid=' + encodeURIComponent(ttclid) + '; expires=' + ttExpires + '; path=/; SameSite=Lax' + ttSecure;
+                }
             }
         } catch (e) {}
 
@@ -537,9 +738,9 @@
             var $checkoutForm = $('form.checkout, form#order_review');
             if (!$checkoutForm.length) return;
 
+            // Meta inputs
             var fbp = getCookieValue('_fbp');
             var fbc = getCookieValue('_fbc');
-
             if (fbp) {
                 if (!$checkoutForm.find('input[name="woo_track_fbp"]').length) {
                     $checkoutForm.append($('<input>', { type: 'hidden', name: 'woo_track_fbp', value: fbp }));
@@ -554,6 +755,24 @@
                     $checkoutForm.find('input[name="woo_track_fbc"]').val(fbc);
                 }
             }
+
+            // TikTok inputs
+            var ttp    = getCookieValue('_ttp') || getCookieValue('ttp');
+            var ttclid = getCookieValue('_ttclid') || getCookieValue('ttclid');
+            if (ttp) {
+                if (!$checkoutForm.find('input[name="woo_track_ttp"]').length) {
+                    $checkoutForm.append($('<input>', { type: 'hidden', name: 'woo_track_ttp', value: ttp }));
+                } else {
+                    $checkoutForm.find('input[name="woo_track_ttp"]').val(ttp);
+                }
+            }
+            if (ttclid) {
+                if (!$checkoutForm.find('input[name="woo_track_ttclid"]').length) {
+                    $checkoutForm.append($('<input>', { type: 'hidden', name: 'woo_track_ttclid', value: ttclid }));
+                } else {
+                    $checkoutForm.find('input[name="woo_track_ttclid"]').val(ttclid);
+                }
+            }
         }
 
         injectCheckoutInputs();
@@ -565,9 +784,10 @@
      * Khởi chạy khi DOM sẵn sàng
      */
     $(document).ready(function () {
-        syncMetaCookiesAndCheckoutFields();
+        syncTrackingCookiesAndCheckoutFields();
         initTrackerConfig();
         setupAddToCartListeners();
+        setupTikTokAdditionalListeners();
     });
 
 })(jQuery);

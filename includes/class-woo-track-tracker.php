@@ -13,6 +13,7 @@ class WooTrack_Tracker {
 
     private $events = array();
     private $meta_events = array();
+    private $tiktok_events = array();
     private $user_data = null;
     private $tracked_order_ids = array();
 
@@ -69,15 +70,18 @@ class WooTrack_Tracker {
             'wooTrackPayload',
             'googletagmanager.com',
             'connect.facebook.net',
+            'analytics.tiktok.com',
             'fbevents.js',
             'fbq(',
             'gtag(',
+            'ttq',
+            'TiktokAnalyticsObject',
         );
         return array_unique(array_merge($excludes, $tracking_patterns));
     }
 
     /**
-     * Chèn mã GTM, Thẻ Google (gtag.js) và Meta Pixel độc lập vào <head>
+     * Chèn mã GTM, Thẻ Google (gtag.js), Meta Pixel và TikTok Pixel độc lập vào <head>
      */
     public function inject_head_tags() {
         $gtm_id          = WooTrack_Helper::get_setting('gtm_id', '');
@@ -162,6 +166,33 @@ fbq('track', 'PageView');
 </script>
 <!-- End Meta Pixel Code -->
         <?php endif;
+
+        // 4. Chèn TikTok Pixel Base Code
+        if (WooTrack_Helper::is_tiktok_enabled()) :
+            $tiktok_pixel_id     = WooTrack_Helper::get_setting('tiktok_pixel_id', '');
+            $tiktok_adv_matching = WooTrack_Helper::get_setting('enable_tiktok_advanced_matching', 'yes') === 'yes';
+
+            $tiktok_order = null;
+            if (is_checkout() && is_order_received_page()) {
+                $tiktok_order = WooTrack_Helper::get_valid_thankyou_order();
+            }
+
+            $tiktok_identify = $tiktok_adv_matching ? WooTrack_Helper::format_tiktok_advanced_matching_browser($tiktok_order) : array();
+            ?>
+<!-- TikTok Pixel Code (WooTrack) -->
+<script data-no-optimize="1" data-no-defer="1">
+!function (w, d, t) {
+  w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie","holdConsent","revokeConsent","grantConsent"],ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.instance=function(t){for(
+var e=ttq._i[t]||[],n=0;n<ttq.methods.length;n++)ttq.setAndDefer(e,ttq.methods[n]);return e},ttq.load=function(e,n){var r="https://analytics.tiktok.com/i18n/pixel/events.js",o=n&&n.partner;ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e]._u=r,ttq._t=ttq._t||{},ttq._t[e]=+new Date,ttq._o=ttq._o||{},ttq._o[e]=n||{};var a=document.createElement("script");a.type="text/javascript",a.async=!0,a.src=r+"?sdkid="+e+"&lib="+t;var c=document.getElementsByTagName("script")[0];c.parentNode.insertBefore(a,c)};
+  ttq.load('<?php echo esc_js($tiktok_pixel_id); ?>');
+  <?php if (!empty($tiktok_identify)) : ?>
+  ttq.identify(<?php echo wp_json_encode($tiktok_identify); ?>);
+  <?php endif; ?>
+  ttq.page();
+}(window, document, 'ttq');
+</script>
+<!-- End TikTok Pixel Code -->
+        <?php endif;
     }
 
     /**
@@ -234,6 +265,22 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
                 'purchase'          => WooTrack_Helper::is_meta_event_enabled('purchase'),
                 'search'            => WooTrack_Helper::is_meta_event_enabled('search'),
             ),
+            // TikTok Ads Config
+            'tiktok_pixel_id'                 => WooTrack_Helper::get_setting('tiktok_pixel_id', ''),
+            'enable_tiktok_pixel'             => WooTrack_Helper::is_tiktok_enabled(),
+            'enable_tiktok_events_api'        => WooTrack_Helper::is_tiktok_events_api_enabled(),
+            'enable_tiktok_advanced_matching' => WooTrack_Helper::get_setting('enable_tiktok_advanced_matching', 'yes') === 'yes',
+            'tiktok_purchase_event_name'      => WooTrack_Helper::get_tiktok_purchase_event_name(),
+            'tiktok_events'                   => array(
+                'view_content'      => WooTrack_Helper::is_tiktok_event_enabled('view_content'),
+                'add_to_cart'       => WooTrack_Helper::is_tiktok_event_enabled('add_to_cart'),
+                'initiate_checkout' => WooTrack_Helper::is_tiktok_event_enabled('initiate_checkout'),
+                'add_payment_info'  => WooTrack_Helper::is_tiktok_event_enabled('add_payment_info'),
+                'place_an_order'    => WooTrack_Helper::is_tiktok_event_enabled('place_an_order'),
+                'purchase'          => WooTrack_Helper::is_tiktok_event_enabled('purchase'),
+                'search'            => WooTrack_Helper::is_tiktok_event_enabled('search'),
+                'add_to_wishlist'   => WooTrack_Helper::is_tiktok_event_enabled('add_to_wishlist'),
+            ),
         );
 
         wp_localize_script('woo-track-script', 'wooTrackConfig', $config);
@@ -275,6 +322,19 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
                     $this->meta_events[] = $pending_meta_add_to_cart;
                 }
             }
+
+            if (WooTrack_Helper::is_tiktok_event_enabled('add_to_cart')) {
+                $pending_tiktok_add_to_cart = WC()->session->get('woo_track_pending_tiktok_add_to_cart');
+                WC()->session->__unset('woo_track_pending_tiktok_add_to_cart');
+                if (
+                    !empty($pending_tiktok_add_to_cart) &&
+                    is_array($pending_tiktok_add_to_cart) &&
+                    (!isset($pending_tiktok_add_to_cart['timestamp']) || ($now - (int) $pending_tiktok_add_to_cart['timestamp']) <= 30)
+                ) {
+                    unset($pending_tiktok_add_to_cart['timestamp']);
+                    $this->tiktok_events[] = $pending_tiktok_add_to_cart;
+                }
+            }
         }
 
         // 1. Sự kiện view_item / ViewContent (Trang chi tiết sản phẩm)
@@ -293,7 +353,7 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
         }
 
         // 4. Sự kiện Search (Tìm kiếm sản phẩm trên website)
-        if (is_search() && WooTrack_Helper::is_meta_event_enabled('search')) {
+        if (is_search()) {
             $search_query = get_search_query();
             if (!empty($search_query)) {
                 global $wp_query;
@@ -308,14 +368,29 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
                     }
                 }
 
-                $this->meta_events[] = array(
-                    'event' => 'Search',
-                    'data'  => array(
-                        'search_string' => $search_query,
-                        'content_type'  => WooTrack_Helper::get_meta_content_type(),
-                        'content_ids'   => $search_content_ids,
-                    )
-                );
+                if (WooTrack_Helper::is_meta_event_enabled('search')) {
+                    $this->meta_events[] = array(
+                        'event' => 'Search',
+                        'data'  => array(
+                            'search_string' => $search_query,
+                            'content_type'  => WooTrack_Helper::get_meta_content_type(),
+                            'content_ids'   => $search_content_ids,
+                        )
+                    );
+                }
+
+                if (WooTrack_Helper::is_tiktok_event_enabled('search')) {
+                    $this->tiktok_events[] = array(
+                        'event' => 'Search',
+                        'data'  => array(
+                            'search_string' => $search_query,
+                            'query'         => $search_query,
+                            'content_type'  => 'product',
+                            'content_ids'   => $search_content_ids,
+                            'content_id'    => !empty($search_content_ids) ? $search_content_ids[0] : '',
+                        )
+                    );
+                }
             }
         }
 
@@ -329,7 +404,7 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
     }
 
     /**
-     * Chuẩn bị dữ liệu cho view_item (GA4) và ViewContent (Meta)
+     * Chuẩn bị dữ liệu cho view_item (GA4), ViewContent (Meta) và ViewContent (TikTok)
      */
     private function prepare_view_item_event() {
         global $post;
@@ -355,6 +430,14 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             $this->meta_events[] = array(
                 'event' => 'ViewContent',
                 'data'  => $meta_prod
+            );
+        }
+
+        if (WooTrack_Helper::is_tiktok_event_enabled('view_content')) {
+            $tiktok_prod = WooTrack_Helper::format_tiktok_product_data($product, 1);
+            $this->tiktok_events[] = array(
+                'event' => 'ViewContent',
+                'data'  => $tiktok_prod
             );
         }
     }
@@ -509,10 +592,35 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
                 )
             );
         }
+
+        // Sự kiện InitiateCheckout cho TikTok Pixel
+        if (WooTrack_Helper::is_tiktok_event_enabled('initiate_checkout')) {
+            $tiktok_contents = array();
+            foreach ($items as $it) {
+                $tiktok_contents[] = array(
+                    'content_id'   => (string) $it['item_id'],
+                    'content_type' => 'product',
+                    'content_name' => (string) $it['item_name'],
+                    'price'        => (float) $it['price'],
+                    'quantity'     => (int) $it['quantity'],
+                );
+            }
+
+            $this->tiktok_events[] = array(
+                'event' => 'InitiateCheckout',
+                'data'  => array(
+                    'content_type' => 'product',
+                    'contents'     => $tiktok_contents,
+                    'num_items'    => $total_qty > 0 ? $total_qty : count($items),
+                    'value'        => round($checkout_total, 2),
+                    'currency'     => $currency
+                )
+            );
+        }
     }
 
     /**
-     * Gắn dữ liệu JSON vào nút thêm vào giỏ hàng trên loop (Hỗ trợ AJAX add_to_cart cho Google & Meta)
+     * Gắn dữ liệu JSON vào nút thêm vào giỏ hàng trên loop (Hỗ trợ AJAX add_to_cart cho Google, Meta & TikTok)
      * Sử dụng preg_replace_callback để tránh lỗi backreference ($1, $2) khi tên sản phẩm chứa ký tự $
      */
     public function add_tracking_data_to_loop_button($html, $product, $args = array()) {
@@ -532,6 +640,12 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             $meta_data    = WooTrack_Helper::format_meta_product_data($product, 1);
             $json_meta    = esc_attr(wp_json_encode($meta_data));
             $extra_attrs .= ' data-woo-track-meta-item="' . $json_meta . '"';
+        }
+
+        if (WooTrack_Helper::is_tiktok_event_enabled('add_to_cart')) {
+            $tiktok_data  = WooTrack_Helper::format_tiktok_product_data($product, 1);
+            $json_tiktok  = esc_attr(wp_json_encode($tiktok_data));
+            $extra_attrs .= ' data-woo-track-tiktok-item="' . $json_tiktok . '"';
         }
 
         if (!empty($extra_attrs)) {
@@ -615,6 +729,22 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
 
             $GLOBALS['woo_track_last_added_meta_item'] = $meta_payload;
         }
+
+        // 3. TikTok Pixel AddToCart
+        if (WooTrack_Helper::is_tiktok_event_enabled('add_to_cart')) {
+            $tiktok_product_data = WooTrack_Helper::format_tiktok_product_data($product, $quantity);
+            $tiktok_payload = array(
+                'event'     => 'AddToCart',
+                'timestamp' => time(),
+                'data'      => $tiktok_product_data
+            );
+
+            if (!$is_ajax_or_rest && function_exists('WC') && WC()->session) {
+                WC()->session->set('woo_track_pending_tiktok_add_to_cart', $tiktok_payload);
+            }
+
+            $GLOBALS['woo_track_last_added_tiktok_item'] = $tiktok_payload;
+        }
     }
 
     /**
@@ -635,11 +765,18 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             }
         }
 
+        if (!empty($GLOBALS['woo_track_last_added_tiktok_item'])) {
+            $fragments['woo_track_tiktok_add_to_cart'] = $GLOBALS['woo_track_last_added_tiktok_item'];
+            if (function_exists('WC') && WC()->session) {
+                WC()->session->__unset('woo_track_pending_tiktok_add_to_cart');
+            }
+        }
+
         return $fragments;
     }
 
     /**
-     * Ghi nhận sự kiện purchase trên trang Cảm ơn (Thank You page) cho Google và Meta (Browser + CAPI)
+     * Ghi nhận sự kiện purchase trên trang Cảm ơn (Thank You page) cho Google, Meta (Browser + CAPI) và TikTok (Pixel + Events API)
      */
     public function track_purchase_event($order_id) {
         if (empty($order_id)) {
@@ -698,7 +835,7 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             return;
         }
 
-        // Event ID đồng nhất cho cả Meta Pixel (Browser) và Conversions API (Server) để khử trùng lặp (Deduplication)
+        // Event ID đồng nhất cho cả Meta Pixel/CAPI và TikTok Pixel/Events API để khử trùng lặp (Deduplication)
         $event_id    = 'order_' . $order->get_id();
         $has_tracked = false;
 
@@ -751,9 +888,27 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             $has_tracked = true;
         }
 
-        // 3. Meta Conversions API (CAPI) phía máy chủ (Đẩy vào hàng đợi ngầm shutdown, gộp chung 1 lần $order->save() bên dưới)
+        // 3. Meta Conversions API (CAPI) phía máy chủ (Đẩy vào hàng đợi ngầm shutdown)
         if (WooTrack_Helper::is_meta_capi_enabled() && WooTrack_Helper::is_meta_event_enabled('purchase')) {
             WooTrack_Meta_CAPI::send_purchase($order, $event_id, true, false);
+            $has_tracked = true;
+        }
+
+        // 4. TikTok Pixel Purchase phía trình duyệt
+        if (WooTrack_Helper::is_tiktok_event_enabled('purchase')) {
+            $tiktok_order_data = WooTrack_Helper::format_tiktok_order_data($order);
+            $tiktok_event_name = WooTrack_Helper::get_tiktok_purchase_event_name();
+            $this->tiktok_events[] = array(
+                'event'    => $tiktok_event_name,
+                'data'     => $tiktok_order_data,
+                'event_id' => $event_id
+            );
+            $has_tracked = true;
+        }
+
+        // 5. TikTok Events API phía máy chủ (Đẩy vào hàng đợi ngầm shutdown)
+        if (WooTrack_Helper::is_tiktok_events_api_enabled() && WooTrack_Helper::is_tiktok_event_enabled('purchase')) {
+            WooTrack_TikTok_Events::send_purchase($order, $event_id, true, false);
             $has_tracked = true;
         }
 
@@ -784,8 +939,10 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             }
         }
 
-        $single_product_data = null;
-        $meta_single_product_data = null;
+        $single_product_data        = null;
+        $meta_single_product_data   = null;
+        $tiktok_single_product_data = null;
+
         if (is_product()) {
             global $post;
             if ($post) {
@@ -797,16 +954,21 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
                     if (WooTrack_Helper::is_meta_event_enabled('add_to_cart')) {
                         $meta_single_product_data = WooTrack_Helper::format_meta_product_data($current_prod, 1);
                     }
+                    if (WooTrack_Helper::is_tiktok_event_enabled('add_to_cart')) {
+                        $tiktok_single_product_data = WooTrack_Helper::format_tiktok_product_data($current_prod, 1);
+                    }
                 }
             }
         }
 
         $payload = array(
-            'events'              => $this->events,
-            'meta_events'         => $this->meta_events,
-            'user_data'           => $this->user_data,
-            'single_product'      => $single_product_data,
-            'meta_single_product' => $meta_single_product_data
+            'events'                => $this->events,
+            'meta_events'           => $this->meta_events,
+            'tiktok_events'         => $this->tiktok_events,
+            'user_data'             => $this->user_data,
+            'single_product'        => $single_product_data,
+            'meta_single_product'   => $meta_single_product_data,
+            'tiktok_single_product' => $tiktok_single_product_data,
         );
 
         ?>

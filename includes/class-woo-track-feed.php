@@ -55,7 +55,7 @@ class WooTrack_Feed {
      * Xóa toàn bộ bộ nhớ đệm Feed khi có thay đổi sản phẩm hoặc cấu hình
      */
     public static function clear_feed_cache() {
-        $platforms = array('meta', 'google');
+        $platforms = array('meta', 'google', 'tiktok');
         $formats   = array('xml', 'csv');
         $modes     = array('parent_id', 'id', 'sku');
 
@@ -69,7 +69,7 @@ class WooTrack_Feed {
     }
 
     /**
-     * Xử lý yêu cầu truy cập URL Feed (?woo_track_feed=meta hoặc ?woo_track_feed=google)
+     * Xử lý yêu cầu truy cập URL Feed (?woo_track_feed=meta, google hoặc tiktok)
      */
     public static function handle_feed_request() {
         if (empty($_GET['woo_track_feed'])) {
@@ -83,7 +83,7 @@ class WooTrack_Feed {
         }
 
         $platform = strtolower(sanitize_text_field(wp_unslash($_GET['woo_track_feed'])));
-        if (!in_array($platform, array('meta', 'google'), true)) {
+        if (!in_array($platform, array('meta', 'google', 'tiktok'), true)) {
             return;
         }
 
@@ -263,7 +263,7 @@ class WooTrack_Feed {
             ? self::format_feed_price($sale_price, $currency)
             : '';
 
-        // Trạng thái tồn kho: Meta yêu cầu "in stock" / "out of stock" (có dấu cách), Google yêu cầu "in_stock" / "out_of_stock" (dấu gạch dưới)
+        // Trạng thái tồn kho: Google yêu cầu "in_stock" / "out_of_stock" (dấu gạch dưới), Meta & TikTok yêu cầu "in stock" / "out of stock" (có dấu cách)
         $in_stock = $product->is_in_stock();
         if ($platform === 'google') {
             $availability = $in_stock ? 'in_stock' : 'out_of_stock';
@@ -271,28 +271,30 @@ class WooTrack_Feed {
             $availability = $in_stock ? 'in stock' : 'out of stock';
         }
 
-        // Danh mục sản phẩm
-        $categories   = wc_get_product_terms($base_product->get_id(), 'product_cat', array('fields' => 'names'));
-        $product_type = (!empty($categories) && !is_wp_error($categories)) ? implode(' > ', $categories) : 'Software > Extensions';
+        // Danh mục sản phẩm (product_type & google_product_category)
+        $categories              = wc_get_product_terms($base_product->get_id(), 'product_cat', array('fields' => 'names'));
+        $product_type            = (!empty($categories) && !is_wp_error($categories)) ? implode(' > ', $categories) : 'Software > Extensions';
+        $google_product_category = (!empty($categories) && !is_wp_error($categories)) ? implode(' > ', $categories) : 'Software > Computer Software';
 
         $sku = (string) $product->get_sku();
 
         return array(
-            'id'                    => (string) $item_id,
-            'item_group_id'         => $group_id,
-            'title'                 => $title,
-            'description'           => $description,
-            'link'                  => $link,
-            'image_link'            => (string) $image_link,
-            'additional_image_link' => (string) $additional_image,
-            'availability'          => $availability,
-            'condition'             => 'new',
-            'price'                 => $formatted_price,
-            'sale_price'            => $formatted_sale_price,
-            'brand'                 => $brand_name,
-            'product_type'          => $product_type,
-            'mpn'                   => !empty($sku) ? $sku : (string) $item_id,
-            'identifier_exists'     => 'no',
+            'id'                      => (string) $item_id,
+            'item_group_id'           => $group_id,
+            'title'                   => $title,
+            'description'             => $description,
+            'link'                    => $link,
+            'image_link'              => (string) $image_link,
+            'additional_image_link'   => (string) $additional_image,
+            'availability'            => $availability,
+            'condition'               => 'new',
+            'price'                   => $formatted_price,
+            'sale_price'              => $formatted_sale_price,
+            'brand'                   => $brand_name,
+            'product_type'            => $product_type,
+            'google_product_category' => $google_product_category,
+            'mpn'                     => !empty($sku) ? $sku : (string) $item_id,
+            'identifier_exists'       => 'no',
         );
     }
 
@@ -354,6 +356,11 @@ class WooTrack_Feed {
 
             $xml .= '      <g:brand>' . self::xml_cdata($item['brand']) . "</g:brand>\n";
             $xml .= '      <g:product_type>' . self::xml_cdata($item['product_type']) . "</g:product_type>\n";
+
+            if (!empty($item['google_product_category'])) {
+                $xml .= '      <g:google_product_category>' . self::xml_cdata($item['google_product_category']) . "</g:google_product_category>\n";
+            }
+
             $xml .= '      <g:mpn>' . esc_xml($item['mpn']) . "</g:mpn>\n";
 
             if ($platform === 'google') {
@@ -370,11 +377,13 @@ class WooTrack_Feed {
     }
 
     /**
-     * Tạo nội dung CSV Feed chuẩn cho Meta Catalog & Google Merchant Center
+     * Tạo nội dung CSV Feed chuẩn cho Meta Catalog, Google Merchant Center & TikTok Catalog
      */
     private static function generate_csv_feed($items, $platform) {
+        $id_column = ($platform === 'tiktok') ? 'sku_id' : 'id';
+
         $headers = array(
-            'id',
+            $id_column,
             'item_group_id',
             'title',
             'description',
@@ -387,6 +396,7 @@ class WooTrack_Feed {
             'additional_image_link',
             'brand',
             'product_type',
+            'google_product_category',
             'mpn',
         );
 
@@ -414,6 +424,7 @@ class WooTrack_Feed {
                 $item['additional_image_link'],
                 $item['brand'],
                 $item['product_type'],
+                $item['google_product_category'],
                 $item['mpn'],
             );
             if ($platform === 'google') {
