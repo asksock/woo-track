@@ -3,7 +3,7 @@
  * Plugin Name: WooTrack - All-in-One Tracker for WooCommerce (Google, Meta & TikTok)
  * Plugin URI:  https://github.com/asksock/woo-track
  * Description: Bộ công cụ độc lập chuyên dụng tích hợp Google Suite (GTM, GA4, Google Ads), Meta (Pixel & CAPI v22.0) và TikTok Ads (Pixel & Events API v1.3) cho WooCommerce.
- * Version:     1.3.2
+ * Version:     1.3.3
  * Author:      AskSock
  * Author URI:  https://github.com/asksock
  * Text Domain: woo-track
@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Định nghĩa các hằng số của plugin
-define('WOO_TRACK_VERSION', '1.3.2');
+define('WOO_TRACK_VERSION', '1.3.3');
 define('WOO_TRACK_FILE', __FILE__);
 define('WOO_TRACK_PATH', plugin_dir_path(__FILE__));
 define('WOO_TRACK_URL', plugin_dir_url(__FILE__));

@@ -63,6 +63,9 @@ class WooTrack_Feed {
             foreach ($formats as $f) {
                 foreach ($modes as $m) {
                     delete_transient(self::CACHE_PREFIX . "{$p}_{$f}_{$m}");
+                    if (defined('WOO_TRACK_VERSION')) {
+                        delete_transient(self::CACHE_PREFIX . WOO_TRACK_VERSION . "_{$p}_{$f}_{$m}");
+                    }
                 }
             }
         }
@@ -92,9 +95,16 @@ class WooTrack_Feed {
             $format = 'xml';
         }
 
+        // Ngăn toàn bộ các plugin Cache (LiteSpeed Cache, WP Rocket, W3TC...) lưu cache trang XML/CSV
+        if (!defined('DONOTCACHEPAGE')) {
+            define('DONOTCACHEPAGE', true);
+        }
+        do_action('litespeed_control_set_nocache', 'WooTrack Product Feed');
+
         $force_refresh   = !empty($_GET['nocache']);
         $identifier_mode = WooTrack_Helper::get_setting('product_identifier', 'parent_id');
-        $cache_key       = self::CACHE_PREFIX . "{$platform}_{$format}_{$identifier_mode}";
+        $ver_key         = defined('WOO_TRACK_VERSION') ? WOO_TRACK_VERSION : '1.0';
+        $cache_key       = self::CACHE_PREFIX . "{$ver_key}_{$platform}_{$format}_{$identifier_mode}";
 
         // Ngăn LiteSpeed Cache / Cloudflare ép kiểu HTML lên trang XML/CSV
         if (!headers_sent()) {
@@ -271,10 +281,11 @@ class WooTrack_Feed {
             $availability = $in_stock ? 'in stock' : 'out of stock';
         }
 
-        // Danh mục sản phẩm (product_type & google_product_category)
+        // Danh mục sản phẩm (product_type & google_product_category chuẩn Google Taxonomy)
         $categories              = wc_get_product_terms($base_product->get_id(), 'product_cat', array('fields' => 'names'));
-        $product_type            = (!empty($categories) && !is_wp_error($categories)) ? implode(' > ', $categories) : 'Software > Extensions';
-        $google_product_category = (!empty($categories) && !is_wp_error($categories)) ? implode(' > ', $categories) : 'Software > Computer Software';
+        $raw_cat                 = (!empty($categories) && !is_wp_error($categories)) ? implode(' > ', $categories) : 'Extensions';
+        $product_type            = (strpos($raw_cat, '>') !== false) ? $raw_cat : 'Software > ' . $raw_cat;
+        $google_product_category = apply_filters('woo_track_feed_google_product_category', 'Software > Computer Software', $base_product);
 
         $sku = (string) $product->get_sku();
 
