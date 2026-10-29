@@ -2,8 +2,8 @@
 /**
  * Plugin Name: WooTrack - All-in-One Tracker for WooCommerce (Google, Meta & TikTok)
  * Plugin URI:  https://github.com/asksock/woo-track
- * Description: Bộ công cụ độc lập chuyên dụng tích hợp Google Suite (GTM, GA4, Google Ads), Meta (Pixel & CAPI v22.0) và TikTok Ads (Pixel & Events API v1.3) cho WooCommerce.
- * Version:     1.3.3
+ * Description: Bộ công cụ độc lập chuyên dụng tích hợp Google Suite (GTM, GA4, Google Ads & Data Manager API v1), Meta (Pixel & CAPI v22.0) và TikTok Ads (Pixel & Events API v1.3) cho WooCommerce.
+ * Version:     1.4.5
  * Author:      AskSock
  * Author URI:  https://github.com/asksock
  * Text Domain: woo-track
@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Định nghĩa các hằng số của plugin
-define('WOO_TRACK_VERSION', '1.3.3');
+define('WOO_TRACK_VERSION', '1.4.5');
 define('WOO_TRACK_FILE', __FILE__);
 define('WOO_TRACK_PATH', plugin_dir_path(__FILE__));
 define('WOO_TRACK_URL', plugin_dir_url(__FILE__));
@@ -75,6 +75,7 @@ final class WooTrack {
             new WooTrack_Settings();
         }
         new WooTrack_Tracker();
+        WooTrack_Google_API::init();
         WooTrack_Meta_CAPI::init();
         WooTrack_TikTok_Events::init();
         WooTrack_Feed::init();
@@ -86,6 +87,7 @@ final class WooTrack {
     private function includes() {
         require_once WOO_TRACK_PATH . 'includes/class-woo-track-helper.php';
         require_once WOO_TRACK_PATH . 'includes/class-woo-track-settings.php';
+        require_once WOO_TRACK_PATH . 'includes/class-woo-track-google-api.php';
         require_once WOO_TRACK_PATH . 'includes/class-woo-track-meta-capi.php';
         require_once WOO_TRACK_PATH . 'includes/class-woo-track-tiktok-events.php';
         require_once WOO_TRACK_PATH . 'includes/class-woo-track-tracker.php';

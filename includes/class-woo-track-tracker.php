@@ -875,6 +875,11 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             if (WooTrack_Helper::get_setting('enable_enhanced_conversions', 'no') === 'yes') {
                 $this->user_data = WooTrack_Helper::format_user_data_for_ads($order);
             }
+
+            // 1b. Google Server-Side API (Data Manager API v1 / Measurement Protocol) đẩy vào hàng đợi ngầm shutdown
+            if (WooTrack_Helper::is_google_server_api_enabled()) {
+                WooTrack_Google_API::send_purchase($order, true, false);
+            }
         }
 
         // 2. Meta Pixel Purchase phía trình duyệt

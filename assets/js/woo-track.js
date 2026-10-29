@@ -89,6 +89,10 @@
      * Đảm bảo cấu hình chuẩn cho cả việc dùng GTM độc lập hoặc dùng trực tiếp GA4/Google Ads
      */
     function sendGtagEvent(eventName, eventData) {
+        if (eventName !== 'conversion' && eventData && typeof eventData === 'object' && !eventData.tracking_source) {
+            eventData.tracking_source = 'browser_gtag';
+        }
+
         // 1. Nếu có GTM, đẩy cấu trúc chuẩn GTM GA4 Ecommerce
         if (config.gtm_id) {
             window.dataLayer.push({ ecommerce: null });
@@ -98,6 +102,7 @@
             } else {
                 window.dataLayer.push({
                     event: eventName,
+                    tracking_source: 'browser_gtag',
                     ecommerce: eventData
                 });
             }
@@ -731,48 +736,61 @@
                     document.cookie = '_ttclid=' + encodeURIComponent(ttclid) + '; expires=' + ttExpires + '; path=/; SameSite=Lax' + ttSecure;
                     document.cookie = 'ttclid=' + encodeURIComponent(ttclid) + '; expires=' + ttExpires + '; path=/; SameSite=Lax' + ttSecure;
                 }
+
+                // Google gclid, gbraid, wbraid
+                var gParams = ['gclid', 'gbraid', 'wbraid'];
+                var gExpires = new Date(Date.now() + 90 * 86400 * 1000).toUTCString();
+                var gSecure = window.location.protocol === 'https:' ? '; Secure' : '';
+                for (var gIdx = 0; gIdx < gParams.length; gIdx++) {
+                    var gKey = gParams[gIdx];
+                    var gVal = urlParams.get(gKey);
+                    if (gVal) {
+                        document.cookie = '_woo_track_' + gKey + '=' + encodeURIComponent(gVal) + '; expires=' + gExpires + '; path=/; SameSite=Lax' + gSecure;
+                    }
+                }
             }
         } catch (e) {}
+
+        function setHiddenField($form, fieldName, fieldVal) {
+            if (!fieldVal) return;
+            var $existing = $form.find('input[name="' + fieldName + '"]');
+            if (!$existing.length) {
+                $form.append($('<input>', { type: 'hidden', name: fieldName, value: fieldVal }));
+            } else {
+                $existing.val(fieldVal);
+            }
+        }
 
         function injectCheckoutInputs() {
             var $checkoutForm = $('form.checkout, form#order_review');
             if (!$checkoutForm.length) return;
 
             // Meta inputs
-            var fbp = getCookieValue('_fbp');
-            var fbc = getCookieValue('_fbc');
-            if (fbp) {
-                if (!$checkoutForm.find('input[name="woo_track_fbp"]').length) {
-                    $checkoutForm.append($('<input>', { type: 'hidden', name: 'woo_track_fbp', value: fbp }));
-                } else {
-                    $checkoutForm.find('input[name="woo_track_fbp"]').val(fbp);
-                }
-            }
-            if (fbc) {
-                if (!$checkoutForm.find('input[name="woo_track_fbc"]').length) {
-                    $checkoutForm.append($('<input>', { type: 'hidden', name: 'woo_track_fbc', value: fbc }));
-                } else {
-                    $checkoutForm.find('input[name="woo_track_fbc"]').val(fbc);
-                }
-            }
+            setHiddenField($checkoutForm, 'woo_track_fbp', getCookieValue('_fbp'));
+            setHiddenField($checkoutForm, 'woo_track_fbc', getCookieValue('_fbc'));
 
             // TikTok inputs
-            var ttp    = getCookieValue('_ttp') || getCookieValue('ttp');
-            var ttclid = getCookieValue('_ttclid') || getCookieValue('ttclid');
-            if (ttp) {
-                if (!$checkoutForm.find('input[name="woo_track_ttp"]').length) {
-                    $checkoutForm.append($('<input>', { type: 'hidden', name: 'woo_track_ttp', value: ttp }));
-                } else {
-                    $checkoutForm.find('input[name="woo_track_ttp"]').val(ttp);
+            setHiddenField($checkoutForm, 'woo_track_ttp', getCookieValue('_ttp') || getCookieValue('ttp'));
+            setHiddenField($checkoutForm, 'woo_track_ttclid', getCookieValue('_ttclid') || getCookieValue('ttclid'));
+
+            // Google inputs (_ga Client ID & gclid/gbraid/wbraid)
+            var rawGa = getCookieValue('_ga');
+            if (rawGa) {
+                var gaParts = rawGa.split('.');
+                var gaCid = gaParts.length >= 4 ? (gaParts[2] + '.' + gaParts[3]) : rawGa;
+                setHiddenField($checkoutForm, 'woo_track_ga_cid', gaCid);
+            }
+
+            var gclid = getCookieValue('_woo_track_gclid');
+            if (!gclid) {
+                var gclAw = getCookieValue('_gcl_aw');
+                if (gclAw && gclAw.split('.').length >= 3) {
+                    gclid = gclAw.split('.').slice(2).join('.');
                 }
             }
-            if (ttclid) {
-                if (!$checkoutForm.find('input[name="woo_track_ttclid"]').length) {
-                    $checkoutForm.append($('<input>', { type: 'hidden', name: 'woo_track_ttclid', value: ttclid }));
-                } else {
-                    $checkoutForm.find('input[name="woo_track_ttclid"]').val(ttclid);
-                }
-            }
+            setHiddenField($checkoutForm, 'woo_track_gclid', gclid);
+            setHiddenField($checkoutForm, 'woo_track_gbraid', getCookieValue('_woo_track_gbraid'));
+            setHiddenField($checkoutForm, 'woo_track_wbraid', getCookieValue('_woo_track_wbraid'));
         }
 
         injectCheckoutInputs();

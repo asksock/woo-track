@@ -68,6 +68,27 @@ class WooTrack_Settings {
             }
         }
 
+        // Google Server-Side API (Data Manager API v1 & GA4 Measurement Protocol)
+        $sanitized['ga4_property_id']           = isset($input['ga4_property_id']) ? preg_replace('/[^0-9]/', '', (string) $input['ga4_property_id']) : '';
+        $sanitized['ga4_api_secret']            = isset($input['ga4_api_secret']) ? sanitize_text_field(trim((string) $input['ga4_api_secret'])) : '';
+        $sanitized['gads_customer_id']          = isset($input['gads_customer_id']) ? preg_replace('/[^0-9-]/', '', trim((string) $input['gads_customer_id'])) : '';
+        $sanitized['gads_conversion_action_id'] = isset($input['gads_conversion_action_id']) ? preg_replace('/[^0-9]/', '', (string) $input['gads_conversion_action_id']) : '';
+
+        if (!empty($input['google_service_account_json'])) {
+            $raw_sa = trim((string) $input['google_service_account_json']);
+            $decoded_sa = json_decode($raw_sa, true);
+            if (!is_array($decoded_sa)) {
+                $decoded_sa = json_decode(wp_unslash($raw_sa), true);
+            }
+            if (is_array($decoded_sa) && !empty($decoded_sa['client_email']) && !empty($decoded_sa['private_key'])) {
+                $sanitized['google_service_account_json'] = wp_json_encode($decoded_sa, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+            } else {
+                $sanitized['google_service_account_json'] = sanitize_textarea_field($raw_sa);
+            }
+        } else {
+            $sanitized['google_service_account_json'] = '';
+        }
+
         // Meta (Facebook) Pixel & Conversions API (CAPI)
         $sanitized['meta_pixel_id']        = isset($input['meta_pixel_id']) ? sanitize_text_field(trim($input['meta_pixel_id'])) : '';
         $sanitized['meta_capi_token']      = isset($input['meta_capi_token']) ? sanitize_textarea_field(trim($input['meta_capi_token'])) : '';
@@ -92,6 +113,7 @@ class WooTrack_Settings {
             'enable_purchase',
             'enable_enhanced_conversions',
             'enable_consent_mode_v2',
+            'enable_google_server_api',
             'enable_meta_pixel',
             'enable_meta_capi',
             'enable_meta_advanced_matching',
@@ -141,6 +163,22 @@ class WooTrack_Settings {
         $begin_checkout_label = isset($options['begin_checkout_label']) ? $options['begin_checkout_label'] : '';
         $add_to_cart_label    = isset($options['add_to_cart_label']) ? $options['add_to_cart_label'] : '';
         $product_identifier   = isset($options['product_identifier']) ? $options['product_identifier'] : 'parent_id';
+
+        // Google Server-Side API (Data Manager API v1 & Measurement Protocol)
+        $enable_google_server_api    = isset($options['enable_google_server_api']) ? $options['enable_google_server_api'] : 'no';
+        $google_service_account_json = isset($options['google_service_account_json']) ? $options['google_service_account_json'] : '';
+        $ga4_property_id             = isset($options['ga4_property_id']) ? $options['ga4_property_id'] : '';
+        $gads_customer_id            = isset($options['gads_customer_id']) ? $options['gads_customer_id'] : '';
+        $gads_conversion_action_id   = isset($options['gads_conversion_action_id']) ? $options['gads_conversion_action_id'] : '';
+        $ga4_api_secret              = isset($options['ga4_api_secret']) ? $options['ga4_api_secret'] : '';
+
+        $parsed_sa_email = '';
+        if (!empty($google_service_account_json)) {
+            $sa_arr = json_decode($google_service_account_json, true);
+            if (is_array($sa_arr) && !empty($sa_arr['client_email'])) {
+                $parsed_sa_email = $sa_arr['client_email'];
+            }
+        }
 
         // Meta (Facebook) Settings
         $meta_pixel_id                 = isset($options['meta_pixel_id']) ? $options['meta_pixel_id'] : '';
@@ -276,6 +314,82 @@ class WooTrack_Settings {
                                 <strong><?php esc_html_e('Gửi tín hiệu Consent Mode v2 mặc định (ad_user_data & ad_personalization = granted)', 'woo-track'); ?></strong>
                             </label>
                             <p class="description"><?php esc_html_e('Đáp ứng yêu cầu mới nhất của Google Ads & GA4 để tính năng Enhanced Conversions và Tiếp thị lại động (Dynamic Remarketing) hoạt động tối đa công suất.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- 3B. GOOGLE SERVER-SIDE API (DATA MANAGER API v1 & MEASUREMENT PROTOCOL) -->
+                <h2 style="border-bottom: 2px solid #0f9d58; padding-bottom: 8px; margin-top:25px; color:#0f9d58;">
+                    <span class="dashicons dashicons-cloud-upload" style="margin-right:6px;"></span>3B. Google Server-Side API (Data Manager API v1 &amp; Measurement Protocol)
+                </h2>
+                <p class="description"><?php esc_html_e('Gửi sự kiện Purchase trực tiếp từ máy chủ (Server-to-Server) giống cơ chế Meta CAPI. Chống chặn quảng cáo (AdBlock/Safari ITP), bắt đơn chuyển khoản trễ và tự động khử trùng lặp (Deduplication) qua transaction_id.', 'woo-track'); ?></p>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Kích hoạt Google Server API', 'woo-track'); ?></th>
+                        <td>
+                            <label>
+                                <input name="woo_track_settings[enable_google_server_api]" type="checkbox" value="yes" <?php checked($enable_google_server_api, 'yes'); ?> />
+                                <strong><?php esc_html_e('Bật gửi sự kiện Purchase phía Máy chủ (Google Data Manager API v1 / Measurement Protocol)', 'woo-track'); ?></strong>
+                            </label>
+                            <p class="description"><?php esc_html_e('Tự động bắt _ga (Client ID) và gclid / gbraid / wbraid đa tầng (URL, Cookie, Checkout Form) lưu vào đơn hàng và bắn ngầm 0ms độ trễ khi đặt hàng.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="google_service_account_json"><?php esc_html_e('Service Account JSON (Data Manager API v1 - Khuyên dùng)', 'woo-track'); ?></label></th>
+                        <td>
+                            <textarea name="woo_track_settings[google_service_account_json]" id="google_service_account_json" rows="4" class="large-text code" placeholder='{"type": "service_account", "project_id": "...", "private_key": "-----BEGIN PRIVATE KEY-----\n...", "client_email": "...@....iam.gserviceaccount.com"}'><?php echo esc_textarea($google_service_account_json); ?></textarea>
+                            <?php if (!empty($parsed_sa_email)) : ?>
+                                <p style="margin:6px 0; color:#0f9d58; font-weight:600;">
+                                    &#9989; <?php esc_html_e('Đã nhận diện Service Account Email:', 'woo-track'); ?> <code><?php echo esc_html($parsed_sa_email); ?></code>
+                                    <span style="font-weight:normal; color:#555;"><?php esc_html_e('(Hãy cấp quyền Editor cho email này trong GA4 Property Access Management và/hoặc Google Ads Access and Security).', 'woo-track'); ?></span>
+                                </p>
+                            <?php endif; ?>
+                            <p class="description">
+                                <?php esc_html_e('Dán toàn bộ nội dung file JSON của Google Cloud Service Account (đã bật Google Data Manager API - hoàn toàn miễn phí $0). Hỗ trợ gửi đồng thời User Data băm SHA-256 (Enhanced Conversions), gclid/gbraid/wbraid và Consent Mode v2.', 'woo-track'); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="ga4_property_id"><?php esc_html_e('GA4 Property ID (Cho Data Manager API)', 'woo-track'); ?></label></th>
+                        <td>
+                            <input name="woo_track_settings[ga4_property_id]" type="text" id="ga4_property_id" value="<?php echo esc_attr($ga4_property_id); ?>" class="regular-text" placeholder="123456789" />
+                            <p class="description"><?php esc_html_e('Mã số Property ID của GA4 (chỉ gồm chữ số, lấy tại GA4 Admin > Property details). Kết hợp cùng GA4 Measurement ID (G-XXXXXXXX) ở mục 2.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="gads_customer_id"><?php esc_html_e('Google Ads Import ID (Tuỳ chọn nâng cao)', 'woo-track'); ?></label></th>
+                        <td>
+                            <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+                                <div>
+                                    <label for="gads_customer_id"><strong><?php esc_html_e('Customer ID (10 chữ số):', 'woo-track'); ?></strong></label><br>
+                                    <input name="woo_track_settings[gads_customer_id]" type="text" id="gads_customer_id" value="<?php echo esc_attr($gads_customer_id); ?>" class="regular-text" placeholder="Để trống nếu dùng qua GA4" />
+                                </div>
+                                <div>
+                                    <label for="gads_conversion_action_id"><strong><?php esc_html_e('Conversion Action ID (Loại Import):', 'woo-track'); ?></strong></label><br>
+                                    <input name="woo_track_settings[gads_conversion_action_id]" type="text" id="gads_conversion_action_id" value="<?php echo esc_attr($gads_conversion_action_id); ?>" class="regular-text" placeholder="Để trống nếu dùng qua GA4" />
+                                </div>
+                            </div>
+                            <p class="description"><?php esc_html_e('Khuyên dùng: ĐỂ TRỐNG 2 ô này nếu bạn đã điền GA4 Property ID ở trên và đặt sự kiện purchase_ga (GA4) làm Primary trong Google Ads. Chỉ điền 2 ô này nếu bạn tạo riêng một Conversion Action có nguồn là "Import" (Offline/API) trên Google Ads.', 'woo-track'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Kiểm tra Kết nối (Diagnostics Test)', 'woo-track'); ?></th>
+                        <td>
+                            <div>
+                                <button type="button" id="woo-track-btn-test-google-api" class="button button-secondary" style="border-color:#0f9d58; color:#0f9d58; font-weight:600;">
+                                    &#9889; <?php esc_html_e('Kiểm tra kết nối Google API ngay (Không cần đặt đơn ảo)', 'woo-track'); ?>
+                                </button>
+                                <span id="woo-track-google-test-spinner" class="spinner" style="float:none; margin-top:4px;"></span>
+                            </div>
+                            <p class="description"><?php esc_html_e('Bấm nút này để gửi 1 gói tin kiểm định (validateOnly = true) trực tiếp tới Google Data Manager API / Measurement Protocol mà không cần tạo đơn hàng nháp và không ảnh hưởng tới Meta hay TikTok.', 'woo-track'); ?></p>
+                            <div id="woo-track-google-test-result" style="display:none; margin-top:12px; max-width:780px;"></div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="ga4_api_secret"><?php esc_html_e('GA4 Measurement Protocol API Secret (Dự phòng / Nhanh)', 'woo-track'); ?></label></th>
+                        <td>
+                            <input name="woo_track_settings[ga4_api_secret]" type="text" id="ga4_api_secret" value="<?php echo esc_attr($ga4_api_secret); ?>" class="regular-text" placeholder="Lấy tại GA4 > Luồng dữ liệu > Measurement Protocol API secrets" />
+                            <p class="description"><?php esc_html_e('Nếu bạn chưa tạo Google Cloud Service Account JSON ở trên, bạn chỉ cần điền API Secret này (kèm GA4 Measurement ID ở mục 2) để plugin tự động gửi qua GA4 Measurement Protocol.', 'woo-track'); ?></p>
                         </td>
                     </tr>
                 </table>
@@ -610,6 +724,67 @@ class WooTrack_Settings {
                 <?php submit_button(__('Lưu Cấu Hình WooTrack', 'woo-track'), 'primary', 'submit', true, array('style' => 'margin-top:20px; font-size:15px; padding:6px 25px;')); ?>
             </form>
         </div>
+
+        <script type="text/javascript">
+        jQuery(document).ready(function($) {
+            $('#woo-track-btn-test-google-api').on('click', function(e) {
+                e.preventDefault();
+                var $btn     = $(this);
+                var $spinner = $('#woo-track-google-test-spinner');
+                var $result  = $('#woo-track-google-test-result');
+
+                $btn.prop('disabled', true);
+                $spinner.addClass('is-active');
+                $result.hide().empty();
+
+                $.post(ajaxurl, {
+                    action: 'woo_track_test_google_api',
+                    nonce: '<?php echo esc_js(wp_create_nonce('woo_track_test_google_api')); ?>',
+                    sa_json: $('#google_service_account_json').val(),
+                    ga4_id: $('#ga4_id').val(),
+                    ga4_property_id: $('#ga4_property_id').val(),
+                    gads_customer_id: $('#gads_customer_id').val(),
+                    gads_conversion_action_id: $('#gads_conversion_action_id').val(),
+                    ga4_api_secret: $('#ga4_api_secret').val()
+                }).done(function(res) {
+                    if (!res || !res.success || !res.data || !res.data.steps) {
+                        var errMsg = (res && res.data && res.data.message) ? res.data.message : 'Không nhận được phản hồi hợp lệ từ máy chủ.';
+                        $result.html('<div style="padding:12px; border-left:4px solid #d63638; background:#fcf0f1; color:#1d2327;"><strong>&#10060; Lỗi:</strong> ' + $('<div>').text(errMsg).html() + '</div>').fadeIn(150);
+                        return;
+                    }
+
+                    var html = '';
+                    $.each(res.data.steps, function(idx, step) {
+                        var borderColor = '#0f9d58';
+                        var bgColor     = '#edfaef';
+                        var icon        = '&#9989;';
+                        if (step.status === 'error') {
+                            borderColor = '#d63638';
+                            bgColor     = '#fcf0f1';
+                            icon        = '&#10060;';
+                        } else if (step.status === 'warning') {
+                            borderColor = '#dba617';
+                            bgColor     = '#fcf9e8';
+                            icon        = '&#9888;&#65039;';
+                        }
+                        var safeTitle = $('<div>').text(step.title || '').html();
+                        var safeMsg   = $('<div>').text(step.message || '').html().replace(/\n/g, '<br>');
+                        html += '<div style="padding:10px 14px; margin-bottom:8px; border-left:4px solid ' + borderColor + '; background:' + bgColor + '; border-radius:2px;">';
+                        html += '<div style="font-weight:600; margin-bottom:4px;">' + icon + ' ' + safeTitle + '</div>';
+                        html += '<div style="font-size:13px; color:#2c3338; line-height:1.5; word-break:break-word;">' + safeMsg + '</div>';
+                        html += '</div>';
+                    });
+
+                    $result.html(html).fadeIn(150);
+                }).fail(function(xhr) {
+                    $result.html('<div style="padding:12px; border-left:4px solid #d63638; background:#fcf0f1;"><strong>&#10060; Lỗi kết nối AJAX:</strong> HTTP ' + xhr.status + '</div>').fadeIn(150);
+                }).always(function() {
+                    $btn.prop('disabled', false);
+                    $spinner.removeClass('is-active');
+                });
+            });
+        });
+        </script>
         <?php
     }
 }

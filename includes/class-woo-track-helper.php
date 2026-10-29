@@ -1017,4 +1017,176 @@ class WooTrack_Helper {
 
         return $data;
     }
+
+    /**
+     * Kiểm tra Google Server-Side API (Data Manager API / Measurement Protocol) có đang bật và đủ cấu hình không
+     */
+    public static function is_google_server_api_enabled() {
+        $enabled = self::get_setting('enable_google_server_api', 'no') === 'yes';
+        if (!$enabled) {
+            return false;
+        }
+
+        // Kiểm tra cấu hình Data Manager API (Service Account JSON)
+        $sa_json = trim((string) self::get_setting('google_service_account_json', ''));
+        $ga4_id  = trim((string) self::get_setting('ga4_id', ''));
+        $ga4_prop_id = trim((string) self::get_setting('ga4_property_id', ''));
+        $gads_cust_id = preg_replace('/[^0-9]/', '', (string) self::get_setting('gads_customer_id', ''));
+        $gads_conv_id = preg_replace('/[^0-9]/', '', (string) self::get_setting('gads_conversion_action_id', ''));
+
+        if (!empty($sa_json)) {
+            if ((!empty($ga4_id) && !empty($ga4_prop_id)) || (!empty($gads_cust_id) && !empty($gads_conv_id))) {
+                return true;
+            }
+        }
+
+        // Kiểm tra cấu hình dự phòng GA4 Measurement Protocol (API Secret)
+        $mp_secret = trim((string) self::get_setting('ga4_api_secret', ''));
+        if (!empty($ga4_id) && !empty($mp_secret)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Trích xuất Google Analytics Client ID từ cookie _ga (Ví dụ: GA1.1.123456789.1729680000 -> 123456789.1729680000)
+     */
+    public static function get_ga_client_id() {
+        if (!empty($_COOKIE['_ga'])) {
+            $raw_ga = sanitize_text_field(wp_unslash($_COOKIE['_ga']));
+            if (preg_match('/^(?:GA\d\.\d\.)?(\d+\.\d+)$/', $raw_ga, $matches)) {
+                return $matches[1];
+            }
+            $parts = explode('.', $raw_ga);
+            if (count($parts) >= 4) {
+                return $parts[2] . '.' . $parts[3];
+            }
+        }
+        return '';
+    }
+
+    /**
+     * Lấy Google Click ID (gclid) từ URL, cookie WooTrack hoặc cookie _gcl_aw chuẩn của Google Tag
+     */
+    public static function get_gclid() {
+        if (!empty($_GET['gclid'])) {
+            return sanitize_text_field(wp_unslash($_GET['gclid']));
+        }
+        if (!empty($_COOKIE['_woo_track_gclid'])) {
+            return sanitize_text_field(wp_unslash($_COOKIE['_woo_track_gclid']));
+        }
+        if (!empty($_COOKIE['_gcl_aw'])) {
+            $gcl_aw = sanitize_text_field(wp_unslash($_COOKIE['_gcl_aw']));
+            $parts  = explode('.', $gcl_aw);
+            if (count($parts) >= 3) {
+                return implode('.', array_slice($parts, 2));
+            }
+        }
+        return '';
+    }
+
+    /**
+     * Lấy gbraid (iOS App-to-Web Click ID) của Google Ads
+     */
+    public static function get_gbraid() {
+        if (!empty($_GET['gbraid'])) {
+            return sanitize_text_field(wp_unslash($_GET['gbraid']));
+        }
+        if (!empty($_COOKIE['_woo_track_gbraid'])) {
+            return sanitize_text_field(wp_unslash($_COOKIE['_woo_track_gbraid']));
+        }
+        if (!empty($_COOKIE['_gcl_gb'])) {
+            $gcl_gb = sanitize_text_field(wp_unslash($_COOKIE['_gcl_gb']));
+            $parts  = explode('.', $gcl_gb);
+            if (count($parts) >= 3) {
+                return implode('.', array_slice($parts, 2));
+            }
+        }
+        return '';
+    }
+
+    /**
+     * Lấy wbraid (iOS Web-to-App Click ID) của Google Ads
+     */
+    public static function get_wbraid() {
+        if (!empty($_GET['wbraid'])) {
+            return sanitize_text_field(wp_unslash($_GET['wbraid']));
+        }
+        if (!empty($_COOKIE['_woo_track_wbraid'])) {
+            return sanitize_text_field(wp_unslash($_COOKIE['_woo_track_wbraid']));
+        }
+        return '';
+    }
+
+    /**
+     * Chuẩn hóa và băm SHA-256 (HEX) cho Email theo đúng đặc tả Google Data Manager API v1:
+     * - Chuyển về chữ thường, cắt khoảng trắng
+     * - Với gmail.com và googlemail.com: xóa dấu chấm (.) và phần hậu tố (+...) trước ký tự @
+     */
+    public static function hash_google_email($email) {
+        $email = self::strtolower_utf8($email);
+        if (empty($email) || !is_email($email)) {
+            return '';
+        }
+
+        $parts = explode('@', $email, 2);
+        if (count($parts) === 2) {
+            $local  = $parts[0];
+            $domain = $parts[1];
+            if ($domain === 'gmail.com' || $domain === 'googlemail.com') {
+                $local = preg_replace('/\+.*$/', '', $local);
+                $local = str_replace('.', '', $local);
+            }
+            $email = $local . '@' . $domain;
+        }
+
+        return hash('sha256', $email);
+    }
+
+    /**
+     * Tạo danh sách userIdentifiers chuẩn Google Data Manager API v1 (UserIdentifier[])
+     */
+    public static function format_google_data_manager_user_identifiers($order) {
+        if (!$order instanceof WC_Order) {
+            return array();
+        }
+
+        $identifiers = array();
+
+        // 1. Email Address (SHA-256 HEX)
+        $hashed_email = self::hash_google_email($order->get_billing_email());
+        if (!empty($hashed_email)) {
+            $identifiers[] = array(
+                'emailAddress' => $hashed_email,
+            );
+        }
+
+        // 2. Phone Number (E.164 có dấu +, SHA-256 HEX)
+        $country    = strtoupper(trim((string) $order->get_billing_country())) ?: 'VN';
+        $e164_phone = self::normalize_phone($order->get_billing_phone(), $country, true);
+        if (!empty($e164_phone)) {
+            $identifiers[] = array(
+                'phoneNumber' => hash('sha256', $e164_phone),
+            );
+        }
+
+        // 3. AddressInfo (Chỉ đính kèm khi có đầy đủ 4 trường bắt buộc: givenName, familyName, regionCode, postalCode để tránh lỗi fast-fail)
+        $fn  = self::strtolower_utf8(preg_replace('/[\s\p{P}]/u', '', (string) $order->get_billing_first_name()));
+        $ln  = self::strtolower_utf8(preg_replace('/[\s\p{P}]/u', '', (string) $order->get_billing_last_name()));
+        $zip = trim((string) $order->get_billing_postcode());
+
+        if (!empty($fn) && !empty($ln) && !empty($country) && !empty($zip)) {
+            $identifiers[] = array(
+                'address' => array(
+                    'givenName'  => hash('sha256', $fn),
+                    'familyName' => hash('sha256', $ln),
+                    'regionCode' => $country,
+                    'postalCode' => $zip,
+                ),
+            );
+        }
+
+        return $identifiers;
+    }
 }
