@@ -204,14 +204,25 @@ class WooTrack_Helper {
     }
 
     /**
-     * Kiểm tra đơn hàng có hợp lệ để ghi nhận chuyển đổi Purchase không (Tránh bắn đơn lỗi/hủy)
+     * Kiểm tra đơn hàng có đang ở trạng thái chờ thanh toán (Tạm giữ / Chờ quét mã QR SePay) hay không
+     */
+    public static function is_order_awaiting_payment($order) {
+        if (!$order instanceof WC_Order) {
+            return false;
+        }
+
+        return $order->has_status(array('on-hold', 'pending'));
+    }
+
+    /**
+     * Kiểm tra đơn hàng có hợp lệ để ghi nhận chuyển đổi Purchase không (Tránh bắn đơn lỗi/hủy hoặc đơn QR chưa thanh toán)
      */
     public static function is_order_valid_for_purchase_tracking($order) {
         if (!$order instanceof WC_Order) {
             return false;
         }
 
-        $invalid_statuses = array('failed', 'cancelled', 'refunded', 'trash', 'checkout-draft');
+        $invalid_statuses = array('on-hold', 'pending', 'failed', 'cancelled', 'refunded', 'trash', 'checkout-draft');
         if ($order->has_status($invalid_statuses)) {
             return false;
         }

@@ -124,9 +124,11 @@ Lớp `WooTrack_Google_API` (`includes/class-woo-track-google-api.php`) bổ sun
   * Giúp quản trị viên dễ dàng đối chiếu và thống kê nguồn sự kiện trong **GA4 Realtime** cũng như báo cáo **Phương diện tùy chỉnh (Custom dimensions)** trên GA4.
 * **Nút Kiểm tra kết nối 1-Click (`ajax_test_google_api`):**
   * Tích hợp nút **"⚡ Kiểm tra kết nối Google API ngay (Không cần đặt đơn ảo)"** ngay tại mục 3B trong trang cài đặt. Tự động ký OAuth2 JWT và gửi gói tin kiểm định (`validateOnly = true`) sang Google Data Manager API (hoặc Debug Server của Measurement Protocol) và hiển thị kết quả chẩn đoán Tiếng Việt tức thì mà không cần tạo đơn hàng nháp và không ảnh hưởng tới Meta hay TikTok.
-* **Khử trùng lặp & Hàng đợi ngầm 0ms độ trễ:**
-  * Google tự động khử trùng lặp (Deduplicate) giữa sự kiện Trình duyệt (`gtag.js`) và Máy chủ (`Data Manager API` / `Measurement Protocol`) dựa trên cùng `transaction_id` / `transactionId`.
-  * Thực thi ở hook `shutdown` sau `fastcgi_finish_request()` / `litespeed_finish_request()` đảm bảo không làm chậm quá trình thanh toán của khách hàng.
+* **Cơ chế Cờ 2 chiều (`Client-Primary, Server-Fallback`) + Cứu hộ AdBlock (Chống x2 doanh thu trên GA4):**
+  * **Ưu tiên `gtag.js` làm chính trên trang Cảm ơn:** Khi khách mở trang Cảm ơn, plugin ưu tiên để `gtag.js` (`browser_gtag`) bắn chính nhằm giữ trọn vẹn 100% thông tin phiên (`session_id`) và nguồn chiến dịch quảng cáo, đồng thời đóng cờ `_woo_track_purchase_tracked` và **không gọi Server API cùng lúc** (loại bỏ hoàn toàn hiện tượng x2 doanh thu trên báo cáo GA4).
+  * **Tự động cứu hộ khi khách bật AdBlock / Brave:** Trên trang Cảm ơn, nếu sau 3 giây `woo-track.js` phát hiện thư viện Google (`googletagmanager.com`) bị trình chặn quảng cáo chặn không tải được, trình duyệt tự động gửi tín hiệu ngầm `navigator.sendBeacon` (`woo_track_google_adblock_rescue`) để kích hoạt Google Server API bắn cứu hộ ngay lập tức.
+  * **Tự động vét đơn rớt (Webhook / Admin duyệt đơn):** Khi đơn hàng hoàn tất qua Webhook hoặc Admin chuyển sang `Completed` mà khách chưa từng tải trang Cảm ơn (chưa có cờ `_woo_track_purchase_tracked`), Google Server API tự động bắn bù và đóng cờ 2 chiều (`_woo_track_google_api_tracked`).
+  * Thực thi ở hook `shutdown` sau `fastcgi_finish_request()` / `litespeed_finish_request()` đảm bảo **0ms độ trễ**.
 
 ---
 
@@ -301,9 +303,9 @@ Plugin được thiết kế với **6 lớp bảo vệ độc lập** để đ�
 1. **Lớp 1 - Xác thực quyền truy cập đơn hàng (`WooTrack_Helper::get_valid_thankyou_order`):**
    - Trên trang nhận đơn hàng (`/checkout/order-received/{id}/`), plugin kiểm tra nghiêm ngặt mã khóa đơn hàng `?key=wc_order_...` thông qua `$order->key_is_valid($order_key)` (hoặc xác thực ID chủ sở hữu đang đăng nhập).
    - Ngăn chặn hoàn toàn việc kẻ xấu hoặc bot quét ID đơn hàng tuần tự để đánh cắp thông tin cá nhân (Email, SĐT, Địa chỉ) trong mã nguồn trang hoặc kích hoạt bắn chuyển đổi giả.
-2. **Lớp 2 - Chặn đơn hàng thanh toán lỗi hoặc bị hủy (`is_order_valid_for_purchase_tracking`):**
-   - Khi khách hàng thanh toán qua cổng online (VNPay, MoMo, PayPal, Stripe...) nhưng bấm hủy hoặc giao dịch thất bại, WooCommerce vẫn chuyển hướng về URL `order-received` với trạng thái đơn là `failed` hoặc `cancelled`.
-   - Plugin tự động kiểm tra và **từ chối bắn sự kiện `Purchase`** đối với các trạng thái `failed`, `cancelled`, `refunded`, `trash`, `checkout-draft`. Nếu sau đó khách bấm thanh toán lại và thành công, đơn hàng vẫn được ghi nhận bình thường.
+2. **Lớp 2 - Chặn đơn hàng thanh toán lỗi/hủy & Cơ chế Chờ quét mã QR SePay thông minh (`is_order_valid_for_purchase_tracking` & `setupPendingPurchasePoller`):**
+   - Khi khách hàng thanh toán qua cổng online (VNPay, MoMo, PayPal, Stripe...) nhưng bấm hủy hoặc giao dịch thất bại, hoặc khi vừa mở màn hình mã QR chuyển khoản (**SePay / VietQR**) đang ở trạng thái **`on-hold` (Tạm giữ)** hoặc **`pending` (Chờ thanh toán)**, plugin **chặn không bắn sự kiện `Purchase` sớm** đối với các trạng thái `on-hold`, `pending`, `failed`, `cancelled`, `refunded`, `trash`, `checkout-draft`.
+   - Đặc biệt trên màn hình mã QR (`on-hold` / `pending`), `woo-track.js` tự động kích hoạt bộ lắng nghe thời gian thực (`woo_track_check_order_paid` mỗi 3 giây & ngay khi khách chuyển từ App Ngân hàng quay lại trình duyệt). Ngay khoảnh khắc khách quét mã QR thành công (đơn chuyển sang `processing` / `completed`), toàn bộ sự kiện **Google Ads (`purchase_ads`), GA4 (`browser_gtag`), Meta Pixel & CAPI, TikTok Pixel & Events API** lập tức được bắn ngay trên màn hình của khách (hoặc bắn bù qua Server API nếu khách tắt trình duyệt sớm), đồng thời khóa 2 lớp (`_woo_track_purchase_tracked` + `sessionStorage`) chống trùng lặp tuyệt đối nếu trang QR tự động tải lại.
 3. **Lớp 3 - Chống tải lại trang F5 (Refresh Protection):**
    - Ngay khi đơn hàng được ghi nhận lần đầu tiên, plugin lưu timestamp vào Order Meta `_woo_track_purchase_tracked`, `_woo_track_google_api_tracked`, `_woo_track_meta_capi_tracked` và `_woo_track_tiktok_api_tracked`.
    - Khi khách hàng mở lại link trang Cảm ơn trên điện thoại, chia sẻ link, hoặc nhấn F5 tải lại trang nhiều lần, plugin sẽ phát hiện cờ này và chặn tuyệt đối việc bắn lại sự kiện cho cả Google, Meta và TikTok.

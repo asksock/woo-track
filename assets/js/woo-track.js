@@ -155,10 +155,196 @@
     }
 
     /**
+     * Kiểm tra đơn hàng đã từng được bắn Purchase trong phiên trình duyệt này chưa (Chống trùng khi cổng QR SePay tự reload trang)
+     */
+    function isOrderAlreadyTrackedInBrowser(orderId) {
+        if (!orderId) return false;
+        try {
+            return sessionStorage.getItem('woo_track_purchased_' + orderId) === '1';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /**
+     * Đánh dấu đơn hàng đã bắn Purchase trên trình duyệt
+     */
+    function markOrderTrackedInBrowser(orderId) {
+        if (!orderId) return;
+        try {
+            sessionStorage.setItem('woo_track_purchased_' + orderId, '1');
+        } catch (e) {}
+    }
+
+    /**
+     * Kích hoạt kiểm tra AdBlock 3 giây sau khi bắn Purchase để cứu hộ qua Google Server API nếu gtag.js bị chặn
+     */
+    function scheduleAdBlockRescue(verifyData) {
+        if (!config.enable_google_server_api || !verifyData || !verifyData.order_id || !config.ajax_url) {
+            return;
+        }
+        setTimeout(function () {
+            if (!window.wooTrackGtagPurchaseConfirmed && typeof window.google_tag_manager === 'undefined') {
+                debugLog('AdBlock detected blocking gtag.js — Triggering Google Server API rescue', verifyData);
+                if (navigator.sendBeacon && typeof FormData !== 'undefined') {
+                    var fd = new FormData();
+                    fd.append('action', 'woo_track_google_adblock_rescue');
+                    fd.append('order_id', verifyData.order_id);
+                    fd.append('order_key', verifyData.order_key);
+                    navigator.sendBeacon(config.ajax_url, fd);
+                } else {
+                    $.post(config.ajax_url, {
+                        action: 'woo_track_google_adblock_rescue',
+                        order_id: verifyData.order_id,
+                        order_key: verifyData.order_key
+                    });
+                }
+            }
+        }, 3000);
+    }
+
+    /**
+     * Lắng nghe tín hiệu quét mã QR thanh toán thành công (SePay / VietQR) trên trang Order Received khi đơn đang ở trạng thái on-hold / pending
+     */
+    function setupPendingPurchasePoller(pending) {
+        if (!pending || !pending.order_id || !pending.order_key || !config.ajax_url) {
+            return;
+        }
+
+        if (isOrderAlreadyTrackedInBrowser(pending.order_id)) {
+            debugLog('Suppressed pending purchase poller — Order already tracked in sessionStorage', { order_id: pending.order_id });
+            return;
+        }
+
+        var pollCount   = 0;
+        var maxPolls    = 300; // Tối đa 15 phút (300 x 3 giây)
+        var isChecking  = false;
+        var isCompleted = false;
+        var pollTimer   = null;
+
+        function checkOrderPaidNow() {
+            if (isCompleted || isChecking) {
+                return;
+            }
+            if (isOrderAlreadyTrackedInBrowser(pending.order_id)) {
+                isCompleted = true;
+                if (pollTimer) clearInterval(pollTimer);
+                return;
+            }
+
+            pollCount++;
+            if (pollCount > maxPolls) {
+                if (pollTimer) clearInterval(pollTimer);
+                return;
+            }
+
+            isChecking = true;
+            $.post(config.ajax_url, {
+                action: 'woo_track_check_order_paid',
+                order_id: pending.order_id,
+                order_key: pending.order_key
+            }).done(function (res) {
+                if (!res || !res.success || !res.data) {
+                    return;
+                }
+
+                // Nếu đơn hàng bị hủy hoặc lỗi thanh toán -> dừng lắng nghe
+                if (res.data.cancelled) {
+                    isCompleted = true;
+                    if (pollTimer) clearInterval(pollTimer);
+                    debugLog('Order cancelled/failed — Stopped QR payment listener', res.data);
+                    return;
+                }
+
+                // Nếu khách đã quét mã QR thanh toán thành công!
+                if (res.data.paid === true) {
+                    isCompleted = true;
+                    if (pollTimer) clearInterval(pollTimer);
+
+                    if (isOrderAlreadyTrackedInBrowser(pending.order_id) || res.data.already_browser_tracked) {
+                        debugLog('Order paid but already tracked by another tab/reload — Skipped duplicate', res.data);
+                        return;
+                    }
+
+                    markOrderTrackedInBrowser(pending.order_id);
+                    debugLog('QR Payment confirmed! Firing Purchase events now', { order_id: pending.order_id, status: res.data.status });
+
+                    // 1. Google Enhanced Conversions user_data
+                    if (pending.user_data) {
+                        gtag('set', 'user_data', pending.user_data);
+                        if (config.gtm_id) {
+                            window.dataLayer.push({ user_data: pending.user_data });
+                        }
+                        debugLog('Set Enhanced Conversions user_data', pending.user_data);
+                    }
+
+                    // 2. Google GA4 purchase & Google Ads conversion (purchase_ads)
+                    if (pending.events && pending.events.length > 0) {
+                        $.each(pending.events, function (idx, item) {
+                            if (item.event === 'purchase') {
+                                if (res.data.google_server_already_tracked) {
+                                    debugLog('Skipped GA4 browser purchase because Google Server API already sent it', pending.order_id);
+                                    return;
+                                }
+                                item.data = $.extend({}, item.data, {
+                                    event_callback: function () {
+                                        window.wooTrackGtagPurchaseConfirmed = true;
+                                    }
+                                });
+                                sendGtagEvent('purchase', item.data);
+                                scheduleAdBlockRescue({
+                                    order_id: pending.order_id,
+                                    order_key: pending.order_key
+                                });
+                            } else {
+                                sendGtagEvent(item.event, item.data);
+                            }
+                        });
+                    }
+
+                    // 3. Meta Pixel Purchase (khử trùng lặp với CAPI qua eventID: order_{id})
+                    if (pending.meta_events && pending.meta_events.length > 0) {
+                        $.each(pending.meta_events, function (idx, item) {
+                            var eventParams = item.event_id ? { eventID: item.event_id } : undefined;
+                            sendMetaPixelEvent(item.event, item.data, eventParams);
+                        });
+                    }
+
+                    // 4. TikTok Pixel CompletePayment / Purchase (khử trùng lặp với Events API qua event_id: order_{id})
+                    if (pending.tiktok_events && pending.tiktok_events.length > 0) {
+                        $.each(pending.tiktok_events, function (idx, item) {
+                            var options = item.event_id ? { event_id: item.event_id } : undefined;
+                            sendTikTokPixelEvent(item.event, item.data, options);
+                        });
+                    }
+                }
+            }).always(function () {
+                isChecking = false;
+            });
+        }
+
+        pollTimer = setInterval(function () {
+            if (typeof document.hidden !== 'undefined' && document.hidden) {
+                return;
+            }
+            checkOrderPaidNow();
+        }, 3000);
+
+        // Kiểm tra ngay lập tức khi khách hàng trên điện thoại vừa chuyển từ App Ngân hàng quay lại trình duyệt
+        $(document).on('visibilitychange', function () {
+            if (!document.hidden && !isCompleted) {
+                checkOrderPaidNow();
+            }
+        });
+    }
+
+    /**
      * Khởi tạo cấu hình ban đầu
      */
     function initTrackerConfig() {
         var payload = getPayload();
+        var currentOrderId = (payload.purchase_verify && payload.purchase_verify.order_id) ? payload.purchase_verify.order_id : null;
+        var skipBrowserPurchaseFromReload = currentOrderId && isOrderAlreadyTrackedInBrowser(currentOrderId);
 
         // 1. Google Enhanced Conversions toàn cục nếu người dùng bật tính năng này
         if (config.enable_enhanced_conversions) {
@@ -166,7 +352,7 @@
         }
 
         // Thiết lập Enhanced Conversions User Data nếu có
-        if (payload.user_data) {
+        if (payload.user_data && !skipBrowserPurchaseFromReload) {
             gtag('set', 'user_data', payload.user_data);
             if (config.gtm_id) {
                 window.dataLayer.push({ user_data: payload.user_data });
@@ -177,8 +363,16 @@
         // Bắn các sự kiện Google chuẩn bị sẵn từ Server (view_item, view_item_list, begin_checkout, purchase)
         if (payload.events && payload.events.length > 0) {
             $.each(payload.events, function (index, item) {
-                if (item.event === 'purchase_duplicate_blocked' || item.event === 'purchase_invalid_status_skipped') {
+                if (
+                    item.event === 'purchase_duplicate_blocked' ||
+                    item.event === 'purchase_invalid_status_skipped' ||
+                    item.event === 'purchase_awaiting_payment'
+                ) {
                     debugLog(item.event, item.data);
+                    return;
+                }
+                if ((item.event === 'purchase' || item.event === 'conversion') && skipBrowserPurchaseFromReload) {
+                    debugLog('Suppressed duplicate ' + item.event + ' after QR payment reload (sessionStorage)', item.data);
                     return;
                 }
                 if (item.event === 'add_to_cart') {
@@ -188,9 +382,19 @@
                         return;
                     }
                 }
+                if (item.event === 'purchase') {
+                    item.data = $.extend({}, item.data, {
+                        event_callback: function () {
+                            window.wooTrackGtagPurchaseConfirmed = true;
+                        }
+                    });
+                }
                 sendGtagEvent(item.event, item.data);
                 if (item.event === 'add_to_cart' && item.conversion_data) {
                     sendGtagEvent('conversion', item.conversion_data);
+                }
+                if (item.event === 'purchase' && payload.purchase_verify && payload.purchase_verify.order_id) {
+                    scheduleAdBlockRescue(payload.purchase_verify);
                 }
             });
         }
@@ -198,6 +402,10 @@
         // 2. Bắn các sự kiện Meta chuẩn bị sẵn từ Server (ViewContent, InitiateCheckout, Purchase, Search, AddToCart)
         if (payload.meta_events && payload.meta_events.length > 0) {
             $.each(payload.meta_events, function (index, item) {
+                if (item.event === 'Purchase' && skipBrowserPurchaseFromReload) {
+                    debugMetaLog('Suppressed duplicate Purchase after QR payment reload (sessionStorage)', item.data);
+                    return;
+                }
                 if (item.event === 'AddToCart') {
                     var mId = null;
                     if (item.data && item.data.contents && item.data.contents[0]) {
@@ -218,6 +426,10 @@
         // 3. Bắn các sự kiện TikTok chuẩn bị sẵn từ Server (ViewContent, InitiateCheckout, Purchase, CompletePayment, Search, AddToCart)
         if (payload.tiktok_events && payload.tiktok_events.length > 0) {
             $.each(payload.tiktok_events, function (index, item) {
+                if ((item.event === 'Purchase' || item.event === 'CompletePayment') && skipBrowserPurchaseFromReload) {
+                    debugTikTokLog('Suppressed duplicate ' + item.event + ' after QR payment reload (sessionStorage)', item.data);
+                    return;
+                }
                 if (item.event === 'AddToCart') {
                     var ttId = null;
                     if (item.data && item.data.contents && item.data.contents[0]) {
@@ -233,6 +445,15 @@
                 var options = item.event_id ? { event_id: item.event_id } : undefined;
                 sendTikTokPixelEvent(item.event, item.data, options);
             });
+        }
+
+        if (currentOrderId && !skipBrowserPurchaseFromReload) {
+            markOrderTrackedInBrowser(currentOrderId);
+        }
+
+        // 4. Nếu đơn hàng đang chờ quét mã QR thanh toán (on-hold / pending như SePay), kích hoạt bộ lắng nghe thông minh
+        if (payload.pending_purchase && payload.pending_purchase.order_id) {
+            setupPendingPurchasePoller(payload.pending_purchase);
         }
     }
 

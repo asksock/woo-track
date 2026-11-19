@@ -42,6 +42,7 @@ class WooTrack_TikTok_Events {
 
         // Hỗ trợ bắn Events API dự phòng khi trạng thái thanh toán hoàn tất (nếu chưa từng được gửi trước đó)
         add_action('woocommerce_payment_complete', array(__CLASS__, 'maybe_send_purchase_on_payment_complete'), 10, 1);
+        add_action('woocommerce_order_status_processing', array(__CLASS__, 'maybe_send_purchase_on_status_processing'), 10, 1);
         add_action('woocommerce_order_status_completed', array(__CLASS__, 'maybe_send_purchase_on_status_completed'), 10, 1);
     }
 
@@ -280,6 +281,13 @@ class WooTrack_TikTok_Events {
      * Dự phòng: Gửi khi thanh toán hoàn tất (payment_complete)
      */
     public static function maybe_send_purchase_on_payment_complete($order_id) {
+        self::maybe_send_delayed_purchase($order_id);
+    }
+
+    /**
+     * Dự phòng: Gửi khi đơn đổi sang Đang xử lý (e.g. Webhook SePay xác nhận quét mã QR thành công)
+     */
+    public static function maybe_send_purchase_on_status_processing($order_id) {
         self::maybe_send_delayed_purchase($order_id);
     }
 

@@ -15,6 +15,8 @@ class WooTrack_Tracker {
     private $meta_events = array();
     private $tiktok_events = array();
     private $user_data = null;
+    private $purchase_verify = null;
+    private $pending_purchase = null;
     private $tracked_order_ids = array();
 
     public function __construct() {
@@ -37,6 +39,10 @@ class WooTrack_Tracker {
 
         // 6. Ghi nhận sự kiện khi đơn hàng hoàn tất (Trang Thank You qua hook chuẩn)
         add_action('woocommerce_thankyou', array($this, 'track_purchase_event'), 10, 1);
+
+        // 6b. AJAX kiểm tra trạng thái đơn hàng chờ quét mã QR (SePay / Chuyển khoản) theo thời gian thực
+        add_action('wp_ajax_woo_track_check_order_paid', array($this, 'ajax_check_order_paid'));
+        add_action('wp_ajax_nopriv_woo_track_check_order_paid', array($this, 'ajax_check_order_paid'));
 
         // 7. In dataLayer payload vào footer (priority 15 chạy TRƯỚC priority 20 của scripts)
         add_action('wp_footer', array($this, 'render_footer_events'), 15);
@@ -245,6 +251,8 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             'debug_mode'                    => WooTrack_Helper::get_setting('debug_mode', 'no') === 'yes',
             'product_identifier'            => WooTrack_Helper::get_setting('product_identifier', 'parent_id'),
             'enable_enhanced_conversions'   => WooTrack_Helper::get_setting('enable_enhanced_conversions', 'no') === 'yes',
+            'enable_google_server_api'      => WooTrack_Helper::is_google_server_api_enabled(),
+            'ajax_url'                      => admin_url('admin-ajax.php'),
             'google_events'                 => array(
                 'view_item_list' => WooTrack_Helper::is_event_enabled('view_item_list'),
                 'view_item'      => WooTrack_Helper::is_event_enabled('view_item'),
@@ -804,22 +812,7 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
         $this->tracked_order_ids[] = $order_id;
         $is_debug = WooTrack_Helper::get_setting('debug_mode', 'no') === 'yes';
 
-        // Không ghi nhận chuyển đổi cho các đơn hàng thanh toán thất bại, bị hủy hoặc hoàn tiền
-        if (!WooTrack_Helper::is_order_valid_for_purchase_tracking($order)) {
-            if ($is_debug) {
-                $this->events[] = array(
-                    'event' => 'purchase_invalid_status_skipped',
-                    'data'  => array(
-                        'order_id' => $order_id,
-                        'status'   => $order->get_status(),
-                        'note'     => 'Đơn hàng #' . $order_id . ' đang ở trạng thái "' . $order->get_status() . '" nên không bắn sự kiện Purchase.'
-                    )
-                );
-            }
-            return;
-        }
-
-        // Kiểm tra xem đơn hàng này đã từng được ghi nhận sự kiện chuyển đổi chưa
+        // Kiểm tra xem đơn hàng này đã từng được ghi nhận sự kiện chuyển đổi trên trình duyệt chưa
         $already_tracked = $order->get_meta('_woo_track_purchase_tracked');
         if (!empty($already_tracked)) {
             if ($is_debug) {
@@ -835,22 +828,82 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             return;
         }
 
+        // Nếu đơn hàng đang ở trạng thái chờ quét mã QR thanh toán (on-hold / pending như SePay):
+        // Chưa bắn Purchase ngay lúc hiện mã QR, mà chuẩn bị gói pending_purchase để JS tự động bắn ngay khi khách quét mã thành công!
+        if (WooTrack_Helper::is_order_awaiting_payment($order)) {
+            $this->pending_purchase = $this->build_pending_purchase_payload($order);
+            if ($is_debug) {
+                $this->events[] = array(
+                    'event' => 'purchase_awaiting_payment',
+                    'data'  => array(
+                        'order_id' => $order_id,
+                        'status'   => $order->get_status(),
+                        'note'     => 'Đơn hàng #' . $order_id . ' đang chờ thanh toán (' . $order->get_status() . '). WooTrack đang lắng nghe tín hiệu quét mã QR để bắn Purchase ngay khi thanh toán thành công.'
+                    )
+                );
+            }
+            return;
+        }
+
+        // Không ghi nhận chuyển đổi cho các đơn hàng thanh toán thất bại, bị hủy hoặc hoàn tiền
+        if (!WooTrack_Helper::is_order_valid_for_purchase_tracking($order)) {
+            if ($is_debug) {
+                $this->events[] = array(
+                    'event' => 'purchase_invalid_status_skipped',
+                    'data'  => array(
+                        'order_id' => $order_id,
+                        'status'   => $order->get_status(),
+                        'note'     => 'Đơn hàng #' . $order_id . ' đang ở trạng thái "' . $order->get_status() . '" nên không bắn sự kiện Purchase.'
+                    )
+                );
+            }
+            return;
+        }
+
         // Event ID đồng nhất cho cả Meta Pixel/CAPI và TikTok Pixel/Events API để khử trùng lặp (Deduplication)
         $event_id    = 'order_' . $order->get_id();
         $has_tracked = false;
 
+        // Luôn truyền thông tin định danh đơn hàng hợp lệ để JS chống bắn trùng qua sessionStorage và hỗ trợ AdBlock Rescue
+        $this->purchase_verify = array(
+            'order_id'  => $order->get_id(),
+            'order_key' => $order->get_order_key(),
+        );
+
         // 1. Google Analytics 4 & Google Ads Purchase
         if (WooTrack_Helper::is_event_enabled('purchase')) {
             $order_data = WooTrack_Helper::format_order_data($order);
+            $gtm_id     = WooTrack_Helper::get_setting('gtm_id', '');
+            $ga4_id     = WooTrack_Helper::get_setting('ga4_id', '');
+            $gads_id    = WooTrack_Helper::get_setting('gads_id', '');
 
-            $this->events[] = array(
-                'event' => 'purchase',
-                'data'  => $order_data
-            );
-            $has_tracked = true;
+            // Kiểm tra xem Google Server API đã bắn đơn này trước khi khách mở trang Thank You chưa (Tránh bắn trùng 2 chiều)
+            $google_server_already_tracked = $order->get_meta('_woo_track_google_api_tracked');
 
-            // Sự kiện conversion cho Google Ads (nếu có cấu hình Ads ID & Label)
-            $gads_id        = WooTrack_Helper::get_setting('gads_id', '');
+            if (empty($google_server_already_tracked)) {
+                $this->events[] = array(
+                    'event' => 'purchase',
+                    'data'  => $order_data
+                );
+                $has_tracked = true;
+
+                // Cơ chế Client-Primary, Server-Fallback:
+                // Chỉ khi không dùng bất kỳ thẻ trình duyệt nào (Server-only) mới bắn trực tiếp tại đây
+                if (WooTrack_Helper::is_google_server_api_enabled() && empty($ga4_id) && empty($gtm_id) && empty($gads_id)) {
+                    WooTrack_Google_API::send_purchase($order, true, false);
+                }
+            } elseif ($is_debug) {
+                $this->events[] = array(
+                    'event' => 'purchase_duplicate_blocked',
+                    'data'  => array(
+                        'order_id'   => $order_id,
+                        'tracked_at' => $google_server_already_tracked,
+                        'note'       => 'Đơn hàng #' . $order_id . ' đã được Google Server API bắn trước đó lúc ' . $google_server_already_tracked . '. Đã chặn gtag.js bắn lại để chống trùng trên GA4.'
+                    )
+                );
+            }
+
+            // Sự kiện conversion riêng cho Google Ads (nếu có cấu hình Ads ID & Label thủ công)
             $purchase_label = WooTrack_Helper::get_setting('purchase_label', '');
 
             if (!empty($gads_id) && !empty($purchase_label)) {
@@ -868,17 +921,13 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
                             'items'          => $order_data['items'],
                         )
                     );
+                    $has_tracked = true;
                 }
             }
 
             // Dữ liệu người dùng nâng cao Google Enhanced Conversions
             if (WooTrack_Helper::get_setting('enable_enhanced_conversions', 'no') === 'yes') {
                 $this->user_data = WooTrack_Helper::format_user_data_for_ads($order);
-            }
-
-            // 1b. Google Server-Side API (Data Manager API v1 / Measurement Protocol) đẩy vào hàng đợi ngầm shutdown
-            if (WooTrack_Helper::is_google_server_api_enabled()) {
-                WooTrack_Google_API::send_purchase($order, true, false);
             }
         }
 
@@ -922,6 +971,137 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             $order->update_meta_data('_woo_track_purchase_tracked', current_time('mysql'));
             $order->save();
         }
+    }
+
+    /**
+     * Chuẩn bị gói dữ liệu Purchase chờ sẵn cho các đơn hàng đang hiển thị mã QR (on-hold / pending)
+     * để trình duyệt bắn ngay lập tức khi khách quét mã thanh toán thành công mà không cần tải lại trang.
+     */
+    private function build_pending_purchase_payload($order) {
+        $order_id        = $order->get_id();
+        $event_id        = 'order_' . $order_id;
+        $google_events   = array();
+        $meta_events     = array();
+        $tiktok_events   = array();
+        $user_data       = null;
+
+        if (WooTrack_Helper::is_event_enabled('purchase')) {
+            $order_data = WooTrack_Helper::format_order_data($order);
+            $google_events[] = array(
+                'event' => 'purchase',
+                'data'  => $order_data,
+            );
+
+            $gads_id        = WooTrack_Helper::get_setting('gads_id', '');
+            $purchase_label = WooTrack_Helper::get_setting('purchase_label', '');
+            if (!empty($gads_id) && !empty($purchase_label)) {
+                $conversion_send_to = WooTrack_Helper::format_gads_send_to($gads_id, $purchase_label);
+                if (!empty($conversion_send_to)) {
+                    $google_events[] = array(
+                        'event' => 'conversion',
+                        'data'  => array(
+                            'send_to'        => $conversion_send_to,
+                            'value'          => $order_data['value'],
+                            'currency'       => $order_data['currency'],
+                            'transaction_id' => $order_data['transaction_id'],
+                            'discount'       => $order_data['discount'],
+                            'new_customer'   => $order_data['new_customer'],
+                            'items'          => $order_data['items'],
+                        ),
+                    );
+                }
+            }
+
+            if (WooTrack_Helper::get_setting('enable_enhanced_conversions', 'no') === 'yes') {
+                $user_data = WooTrack_Helper::format_user_data_for_ads($order);
+            }
+        }
+
+        if (WooTrack_Helper::is_meta_event_enabled('purchase')) {
+            $meta_events[] = array(
+                'event'    => 'Purchase',
+                'data'     => WooTrack_Helper::format_meta_order_data($order),
+                'event_id' => $event_id,
+            );
+        }
+
+        if (WooTrack_Helper::is_tiktok_event_enabled('purchase')) {
+            $tiktok_events[] = array(
+                'event'    => WooTrack_Helper::get_tiktok_purchase_event_name(),
+                'data'     => WooTrack_Helper::format_tiktok_order_data($order),
+                'event_id' => $event_id,
+            );
+        }
+
+        return array(
+            'order_id'      => $order_id,
+            'order_key'     => $order->get_order_key(),
+            'status'        => $order->get_status(),
+            'user_data'     => $user_data,
+            'events'        => $google_events,
+            'meta_events'   => $meta_events,
+            'tiktok_events' => $tiktok_events,
+        );
+    }
+
+    /**
+     * AJAX Handler: Kiểm tra trạng thái đơn hàng chờ quét mã QR (SePay) đã thanh toán thành công hay chưa
+     */
+    public function ajax_check_order_paid() {
+        $order_id  = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
+        $order_key = isset($_POST['order_key']) ? sanitize_text_field(wp_unslash($_POST['order_key'])) : '';
+
+        if ($order_id <= 0 || empty($order_key)) {
+            wp_send_json_error();
+        }
+
+        $order = wc_get_order($order_id);
+        if (!$order instanceof WC_Order || !$order->key_is_valid($order_key)) {
+            wp_send_json_error();
+        }
+
+        // Nếu đơn vẫn đang ở trạng thái chờ thanh toán (on-hold / pending)
+        if (WooTrack_Helper::is_order_awaiting_payment($order)) {
+            wp_send_json_success(array(
+                'paid'   => false,
+                'status' => $order->get_status(),
+            ));
+        }
+
+        // Nếu đơn đã chuyển sang hủy / lỗi / hoàn tiền
+        if (!WooTrack_Helper::is_order_valid_for_purchase_tracking($order)) {
+            wp_send_json_success(array(
+                'paid'      => false,
+                'cancelled' => true,
+                'status'    => $order->get_status(),
+            ));
+        }
+
+        // Đơn hàng đã thanh toán thành công (processing / completed)!
+        $already_browser_tracked       = !empty($order->get_meta('_woo_track_purchase_tracked'));
+        $google_server_already_tracked = !empty($order->get_meta('_woo_track_google_api_tracked'));
+
+        if (!$already_browser_tracked) {
+            $event_id = 'order_' . $order_id;
+
+            // Đảm bảo Meta CAPI và TikTok Events API cũng được kích hoạt (bên trong có khóa chống trùng với Webhook)
+            if (WooTrack_Helper::is_meta_capi_enabled() && WooTrack_Helper::is_meta_event_enabled('purchase')) {
+                WooTrack_Meta_CAPI::send_purchase($order, $event_id, true, false);
+            }
+            if (WooTrack_Helper::is_tiktok_events_api_enabled() && WooTrack_Helper::is_tiktok_event_enabled('purchase')) {
+                WooTrack_TikTok_Events::send_purchase($order, $event_id, true, false);
+            }
+
+            $order->update_meta_data('_woo_track_purchase_tracked', current_time('mysql'));
+            $order->save();
+        }
+
+        wp_send_json_success(array(
+            'paid'                          => true,
+            'status'                        => $order->get_status(),
+            'already_browser_tracked'       => $already_browser_tracked,
+            'google_server_already_tracked' => $google_server_already_tracked,
+        ));
     }
 
     public function render_footer_events() {
@@ -971,6 +1151,8 @@ src="https://www.facebook.com/tr?id=<?php echo esc_attr($meta_pixel_id); ?>&ev=P
             'meta_events'           => $this->meta_events,
             'tiktok_events'         => $this->tiktok_events,
             'user_data'             => $this->user_data,
+            'purchase_verify'       => $this->purchase_verify,
+            'pending_purchase'      => $this->pending_purchase,
             'single_product'        => $single_product_data,
             'meta_single_product'   => $meta_single_product_data,
             'tiktok_single_product' => $tiktok_single_product_data,

@@ -55,9 +55,15 @@ class WooTrack_Google_API {
         add_action('woocommerce_store_api_checkout_update_order_meta', array(__CLASS__, 'save_checkout_meta_data'), 10, 1);
         add_action('woocommerce_checkout_order_created', array(__CLASS__, 'save_checkout_meta_data'), 10, 1);
 
-        // Bắn bù Server API khi trạng thái thanh toán hoàn tất (Webhook ngân hàng / Admin duyệt đơn)
+        // Bắn bù Server API khi trạng thái thanh toán hoàn tất (Webhook ngân hàng SePay / Admin duyệt đơn)
         add_action('woocommerce_payment_complete', array(__CLASS__, 'maybe_send_purchase_on_payment_complete'), 10, 1);
+        add_action('woocommerce_order_status_processing', array(__CLASS__, 'maybe_send_purchase_on_status_processing'), 10, 1);
         add_action('woocommerce_order_status_completed', array(__CLASS__, 'maybe_send_purchase_on_status_completed'), 10, 1);
+        add_action('woo_track_google_delayed_check', array(__CLASS__, 'maybe_send_delayed_purchase'), 10, 1);
+
+        // AJAX cứu hộ đơn hàng khi trình duyệt khách hàng bị AdBlock / Brave chặn gtag.js trên trang Thank You
+        add_action('wp_ajax_woo_track_google_adblock_rescue', array(__CLASS__, 'ajax_adblock_rescue'));
+        add_action('wp_ajax_nopriv_woo_track_google_adblock_rescue', array(__CLASS__, 'ajax_adblock_rescue'));
 
         // AJAX kiểm tra kết nối trực tiếp trong trang Admin mà không cần tạo đơn hàng ảo
         add_action('wp_ajax_woo_track_test_google_api', array(__CLASS__, 'ajax_test_google_api'));
@@ -151,6 +157,13 @@ class WooTrack_Google_API {
     }
 
     /**
+     * Hook dự phòng khi đơn hàng chuyển sang trạng thái Đang xử lý (e.g. Webhook SePay xác nhận quét mã QR thành công)
+     */
+    public static function maybe_send_purchase_on_status_processing($order_id) {
+        self::maybe_send_delayed_purchase($order_id);
+    }
+
+    /**
      * Hook dự phòng khi đơn hàng chuyển sang trạng thái hoàn thành
      */
     public static function maybe_send_purchase_on_status_completed($order_id) {
@@ -158,9 +171,12 @@ class WooTrack_Google_API {
     }
 
     /**
-     * Kiểm tra và gửi bù sự kiện Purchase qua Google Server API (trong cửa sổ 72 giờ của GA4 Data Manager API)
+     * Kiểm tra và gửi bù sự kiện Purchase qua Google Server API (Cơ chế Client-Primary, Server-Fallback):
+     * - Nếu khách đã mở trang Thank You (_woo_track_purchase_tracked đã có): Dừng lại, không bắn trùng lên GA4.
+     * - Nếu đơn vừa mới thanh toán xong (< 45 giây kể từ lúc đơn hợp lệ): Hẹn lịch kiểm tra lại sau 60 giây để nhường quyền ưu tiên cho gtag.js trên trình duyệt của khách.
+     * - Nếu khách tắt trình duyệt sớm không mở trang Thank You: Gọi Server API bắn bù và đóng cờ.
      */
-    private static function maybe_send_delayed_purchase($order_id) {
+    public static function maybe_send_delayed_purchase($order_id) {
         if (!WooTrack_Helper::is_google_server_api_enabled() || !WooTrack_Helper::is_event_enabled('purchase')) {
             return;
         }
@@ -170,18 +186,67 @@ class WooTrack_Google_API {
             return;
         }
 
-        if ($order->get_meta('_woo_track_google_api_tracked')) {
+        // Không bắn các đơn đang tạm giữ (on-hold), chờ thanh toán (pending) hoặc lỗi/hủy
+        if (!WooTrack_Helper::is_order_valid_for_purchase_tracking($order)) {
             return;
         }
 
-        // Nếu đơn đã được bắn qua trình duyệt nhưng quá 72 giờ (giới hạn eventTimestamp của GA4 trong Data Manager API), không bắn bù
-        $browser_tracked = $order->get_meta('_woo_track_purchase_tracked');
-        $date_created    = $order->get_date_created();
-        if (!empty($browser_tracked) && $date_created && (time() - $date_created->getTimestamp()) > (72 * HOUR_IN_SECONDS)) {
+        // Nếu đã được bắn bởi Server API hoặc đã được bắn bởi gtag.js trên trang Thank You -> Dừng lại ngay để chống Duplicate trên GA4
+        if ($order->get_meta('_woo_track_google_api_tracked') || $order->get_meta('_woo_track_purchase_tracked')) {
             return;
+        }
+
+        // Tính mốc thời gian đơn hàng bắt đầu hợp lệ (đã thanh toán) để nhường trình duyệt 45 giây (kể cả khi khách mất 2-3 phút mới quét mã QR SePay)
+        $ready_ts = (int) $order->get_meta('_woo_track_google_ready_ts');
+        if ($ready_ts <= 0) {
+            $ready_ts = time();
+            $order->update_meta_data('_woo_track_google_ready_ts', $ready_ts);
+            $order->save();
+        }
+
+        $elapsed_since_ready = time() - $ready_ts;
+        if ($elapsed_since_ready < 45) {
+            if (!wp_next_scheduled('woo_track_google_delayed_check', array((int) $order_id))) {
+                wp_schedule_single_event(time() + 60, 'woo_track_google_delayed_check', array((int) $order_id));
+            }
+            return;
+        }
+
+        $date_created = $order->get_date_created();
+        if ($date_created) {
+            $age = time() - $date_created->getTimestamp();
+            // Quá 72 giờ (giới hạn eventTimestamp của Google Data Manager API) thì không bắn nữa
+            if ($age > (72 * HOUR_IN_SECONDS)) {
+                return;
+            }
         }
 
         self::send_purchase($order, true, true);
+    }
+
+    /**
+     * AJAX Handler: Cứu hộ đơn hàng qua Google Server API khi trình duyệt của khách mở trang Thank You
+     * nhưng bị tiện ích AdBlock / Brave chặn không cho tải thư viện gtag.js / gtm.js
+     */
+    public static function ajax_adblock_rescue() {
+        $order_id  = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
+        $order_key = isset($_POST['order_key']) ? sanitize_text_field(wp_unslash($_POST['order_key'])) : '';
+
+        if ($order_id <= 0 || empty($order_key)) {
+            wp_send_json_error();
+        }
+
+        $order = wc_get_order($order_id);
+        if (!$order instanceof WC_Order || !$order->key_is_valid($order_key)) {
+            wp_send_json_error();
+        }
+
+        if ($order->get_meta('_woo_track_google_api_tracked')) {
+            wp_send_json_success(array('status' => 'already_sent'));
+        }
+
+        self::send_purchase($order, true, true);
+        wp_send_json_success(array('status' => 'rescued_by_server_api'));
     }
 
     /**

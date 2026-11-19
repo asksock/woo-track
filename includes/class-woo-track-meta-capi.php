@@ -42,6 +42,7 @@ class WooTrack_Meta_CAPI {
 
         // Hỗ trợ bắn CAPI dự phòng khi trạng thái thanh toán hoàn tất (nếu chưa từng được gửi trước đó)
         add_action('woocommerce_payment_complete', array(__CLASS__, 'maybe_send_purchase_on_payment_complete'), 10, 1);
+        add_action('woocommerce_order_status_processing', array(__CLASS__, 'maybe_send_purchase_on_status_processing'), 10, 1);
         add_action('woocommerce_order_status_completed', array(__CLASS__, 'maybe_send_purchase_on_status_completed'), 10, 1);
     }
 
@@ -285,6 +286,13 @@ class WooTrack_Meta_CAPI {
      * Dự phòng: Gửi CAPI khi thanh toán hoàn tất (e.g. IPN/Webhook từ cổng thanh toán online)
      */
     public static function maybe_send_purchase_on_payment_complete($order_id) {
+        self::maybe_send_delayed_purchase($order_id);
+    }
+
+    /**
+     * Dự phòng: Gửi CAPI khi đơn đổi sang Đang xử lý (e.g. Webhook SePay xác nhận quét mã QR thành công)
+     */
+    public static function maybe_send_purchase_on_status_processing($order_id) {
         self::maybe_send_delayed_purchase($order_id);
     }
 
